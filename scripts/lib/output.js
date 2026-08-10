@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -41,7 +42,7 @@ export async function cleanupOutputDir(config) {
   if (!outputDir) return;
 
   try {
-    await mkdir(outputDir, { recursive: true });
+    await mkdir(outputDir, { recursive: true, mode: 0o700 });
     const entries = await readdir(outputDir, { withFileTypes: true });
     const cutoff = Date.now() - (config.outputRetentionDays || 30) * 24 * 60 * 60 * 1000;
 
@@ -59,10 +60,8 @@ export async function cleanupOutputDir(config) {
 }
 
 export async function writeFullOutput(config, { kind, provider, label, content, extension = "txt" }) {
-  await cleanupOutputDir(config);
-
   const outputDir = config.outputDir;
-  await mkdir(outputDir, { recursive: true });
+  await mkdir(outputDir, { recursive: true, mode: 0o700 });
   const fileName = [
     OUTPUT_PREFIX,
     timestamp(),
@@ -72,11 +71,15 @@ export async function writeFullOutput(config, { kind, provider, label, content, 
     slug(provider, "provider"),
     "-",
     slug(label, "content"),
+    "-",
+    // Second-granularity timestamps plus slug fallbacks (e.g. CJK labels) collide
+    // across parallel invocations; a random suffix keeps each file distinct.
+    randomBytes(3).toString("hex"),
     ".",
     extensionFor(extension),
   ].join("");
   const fullPath = path.join(outputDir, fileName);
-  await writeFile(fullPath, content, "utf8");
+  await writeFile(fullPath, content, { encoding: "utf8", mode: 0o600 });
   return fullPath;
 }
 
