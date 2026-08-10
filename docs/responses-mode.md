@@ -89,7 +89,7 @@ auto | native | exa | firecrawl | parallel | perplexity
 - `web_search_call`、`x_search_call` 的 action/query/url/source；
 - usage 与费用字段。
 
-结果进入 `sources.grok`：
+解析出的每条 source 形如：
 
 ```json
 {
@@ -108,7 +108,7 @@ auto | native | exa | firecrawl | parallel | perplexity
 
 ```text
 Grok Responses ──────────────┐
-Tavily Search（有 key）───────┼─ sources.merged
+Tavily Search（有 key）───────┼─ sources.items（去重合并 + 上限裁剪）
 Firecrawl Search（Keyless/key）┘
 ```
 

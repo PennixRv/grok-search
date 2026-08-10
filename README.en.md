@@ -147,7 +147,7 @@ Supported variables:
 - `HTTPS_PROXY` / `https_proxy`
 - `ALL_PROXY` / `all_proxy`
 - `NO_PROXY` / `no_proxy`
-- `GROK_PROXY` to explicitly set one proxy URL for this tool, or `GROK_PROXY=off` to force direct connections
+- `GROK_PROXY` to explicitly set one proxy URL for this tool, or `GROK_PROXY=off` to force direct connections. An invalid explicit `GROK_PROXY` fails the command (`PROXY_CONFIG_INVALID`) instead of silently falling back to a direct connection; failures of ambient proxy variables stay non-fatal and surface via `diagnostics.options.proxy_mode` on search
 
 `NO_PROXY` is honored, and loopback hosts (`localhost`, `127.0.0.1`, `::1`) are always added to the bypass list.
 
@@ -167,6 +167,8 @@ Supported variables:
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | No | OpenRouter Responses | `auto`, `native`, `exa`, `firecrawl`, `parallel`, or `perplexity`. Default: `auto`. |
 | `GROK_DEFAULT_EXTRA` | `defaultExtra` | No | `search.js` | Combined Tavily/Firecrawl source target. Default: `6`. |
 | `GROK_SOURCE_CHARS` | `sourceChars` | No | `search.js` | Per-source stdout snippet limit. Default: `400`; `0` omits snippets. |
+| `GROK_MAX_SOURCES` | `maxSources` | No | `search.js` | Cap on source cards returned on stdout. Default: `12`; the untruncated list is stored at `sources.raw_path`. |
+| `GROK_DEADLINE_SECONDS` | `deadlineSeconds` | No | all scripts | Whole-command deadline in seconds. Default: `240`, `0` disables; on expiry the command prints a `DEADLINE_EXCEEDED` JSON envelope before exiting. |
 | `TAVILY_API_KEY` | `tavilyApiKey` | No | `search.js`, `fetch.js`, `map.js` | Enables Tavily Search/Extract/Map. Without it, search/fetch still use Firecrawl Keyless and map uses Direct Map. |
 | `TAVILY_API_URL` | `tavilyApiUrl` | No | Tavily paths | Defaults to `https://api.tavily.com`. |
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | No | `search.js`, `fetch.js` | Optional. Uses Firecrawl Keyless when absent; a key provides account-scoped credits and higher rate limits. |
@@ -206,6 +208,8 @@ On success, provider attempts, warnings, timestamps, and command options live un
 ./scripts/search.js --extra 10 "latest pi coding agent docs"
 ./scripts/search.js --no-extra "query"
 ./scripts/search.js --source-chars 200 "query"
+./scripts/search.js --max-sources 8 "query"
+./scripts/search.js --deadline 120 "query"
 ./scripts/search.js --full-sources "debug provider raw"
 ./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
 ./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
@@ -214,10 +218,11 @@ On success, provider attempts, warnings, timestamps, and command options live un
 `search.js` is Responses-only. It calls `{GROK_API_URL}/responses` with `stream:false`, enables the provider-native web search tool, and returns:
 
 - `answer.text`, `answer.chars`, `answer.original_chars`, `answer.truncated`, `answer.full_path`
-- `sources.grok`, `sources.extra`, and `sources.merged` compact source cards
-- `sources.raw_path` when full source/provider raw data is stored on disk
+- `sources.items`: one deduplicated, merged list of compact source cards, capped at `12` by default (`--max-sources`); when truncating, `citation` sources outrank extra-provider results, which outrank `searched`-only ones
+- `sources.returned` / `sources.total` / `sources.omitted` so callers always know whether the list was truncated
+- `sources.raw_path` when anything was truncated or provider raw data is stored on disk (includes the full source lists and `grok_tool_calls`)
 - `sources.raw` only when `--full-sources` is used
-- `diagnostics.grok_endpoint`, `diagnostics.usage` / `diagnostics.cost_usd` when supplied by the provider, `diagnostics.responses_*`, `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, and `diagnostics.searched_at`
+- `diagnostics.grok_endpoint`, `diagnostics.usage` / `diagnostics.cost_usd` when supplied by the provider, `diagnostics.responses_*` (`responses_tool_calls` is a `{ total, failed? }` summary; the full list lives in `raw_path`), `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, `diagnostics.duration_ms`, and `diagnostics.searched_at`
 
 By default the command starts Grok Responses, Tavily Search when configured, and Firecrawl Search in parallel. Tavily and Firecrawl remain independent evidence channels and are never injected into Grok input.
 
@@ -298,6 +303,8 @@ No key required:
 node tests/sources.test.js
 node tests/proxy.test.js
 node tests/responses.test.js
+node tests/output.test.js
+node tests/retry.test.js
 node tests/argv.test.js
 ```
 

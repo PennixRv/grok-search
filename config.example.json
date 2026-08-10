@@ -13,6 +13,8 @@
   "responsesOpenRouterEngine": "auto",
   "defaultExtra": 6,
   "sourceChars": 400,
+  "maxSources": 12,
+  "deadlineSeconds": 240,
   "tavilyApiKey": "",
   "tavilyApiUrl": "https://api.tavily.com",
   "firecrawlApiKey": "",

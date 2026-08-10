@@ -140,7 +140,7 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 - `HTTPS_PROXY` / `https_proxy`
 - `ALL_PROXY` / `all_proxy`
 - `NO_PROXY` / `no_proxy`
-- `GROK_PROXY`：显式给本工具指定一个代理 URL；设为 `GROK_PROXY=off` 可强制直连
+- `GROK_PROXY`：显式给本工具指定一个代理 URL；设为 `GROK_PROXY=off` 可强制直连。显式配置无效时命令会直接失败（`PROXY_CONFIG_INVALID`），不会静默退回直连；环境继承的代理失败则继续运行，并通过 search 的 `diagnostics.options.proxy_mode` 暴露状态
 
 `NO_PROXY` 会被尊重，并且会始终把回环地址（`localhost`、`127.0.0.1`、`::1`）加入绕过列表。
 
@@ -160,6 +160,8 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | 否 | OpenRouter Responses | `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`。默认 `auto`。 |
 | `GROK_DEFAULT_EXTRA` | `defaultExtra` | 否 | `search.js` | Tavily 与 Firecrawl 合计的默认 extra source 数量。默认 `6`。 |
 | `GROK_SOURCE_CHARS` | `sourceChars` | 否 | `search.js` | 每条 source stdout snippet 长度。默认 `400`；`0` 表示不输出 snippet。 |
+| `GROK_MAX_SOURCES` | `maxSources` | 否 | `search.js` | stdout 返回的 source card 数量上限。默认 `12`；被裁剪的完整列表落盘到 `sources.raw_path`。 |
+| `GROK_DEADLINE_SECONDS` | `deadlineSeconds` | 否 | 所有脚本 | 单条命令总耗时上限（秒）。默认 `240`，`0` 表示禁用；超时会先输出 `DEADLINE_EXCEEDED` JSON 再退出。 |
 | `TAVILY_API_KEY` | `tavilyApiKey` | 否 | `search.js`、`fetch.js`、`map.js` | 启用 Tavily Search / Extract / Map。没有它时，search/fetch 仍可使用 Firecrawl Keyless，map 使用 Direct Map。 |
 | `TAVILY_API_URL` | `tavilyApiUrl` | 否 | Tavily 路径 | 默认 `https://api.tavily.com`。 |
 | `FIRECRAWL_API_KEY` | `firecrawlApiKey` | 否 | `search.js`、`fetch.js` | 可选。未配置时使用 Firecrawl Keyless；配置后使用独立账户额度和更高限流。 |
@@ -199,6 +201,8 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 ./scripts/search.js --extra 10 "latest pi coding agent docs"
 ./scripts/search.js --no-extra "query"
 ./scripts/search.js --source-chars 200 "query"
+./scripts/search.js --max-sources 8 "query"
+./scripts/search.js --deadline 120 "query"
 ./scripts/search.js --full-sources "debug provider raw"
 ./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
 ./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
@@ -207,10 +211,11 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 `search.js` 只使用 Responses 协议，以 `stream:false` 调用 `{GROK_API_URL}/responses`，启用 provider-native web search，并返回：
 
 - `answer.text`、`answer.chars`、`answer.original_chars`、`answer.truncated`、`answer.full_path`
-- `sources.grok`、`sources.extra`、`sources.merged` 短 source card
-- `sources.raw_path`，在完整 source / provider raw 落盘时出现
+- `sources.items`：单份去重合并后的短 source card 列表，默认最多 `12` 条（`--max-sources` 可调）；裁剪时 `citation` 优先于 extra provider，再优先于 `searched`
+- `sources.returned` / `sources.total` / `sources.omitted`：让调用方明确知道是否被截断
+- `sources.raw_path`，在有信息被裁剪或 provider raw 落盘时出现（含完整 source 列表与 `grok_tool_calls`）
 - `sources.raw`，仅在使用 `--full-sources` 时出现
-- `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.searched_at`
+- `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, failed? }` 摘要，完整列表在 `raw_path` 中）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
 
 默认会同时发起 Grok Responses、Tavily Search（配置 key 时）和 Firecrawl Search。三路并行，Tavily/Firecrawl 结果始终作为独立补充信源，不会注入 Grok input。
 
@@ -291,6 +296,8 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 node tests/sources.test.js
 node tests/proxy.test.js
 node tests/responses.test.js
+node tests/output.test.js
+node tests/retry.test.js
 node tests/argv.test.js
 ```
 

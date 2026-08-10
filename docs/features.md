@@ -21,9 +21,9 @@
 - xAI/openai-compatible：`web_search`
 - OpenRouter：`openrouter:web_search`
 
-Responses sources 写入 `sources.grok`，可能包含：
+Responses sources 与 extra sources 去重合并后写入 `sources.items`（默认最多 12 条，`--max-sources` 可调；`sources.omitted` 标记裁剪量），每条可能包含：
 
-- `source_type: citation | searched`
+- `source_type: citation | searched`（extra provider 的结果没有该字段）
 - `tool: web_search | x_search | openrouter:web_search`
 
 ### 独立补充信源
@@ -45,7 +45,7 @@ Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 - 回答正文是 Tavily/Firecrawl 原始标题、URL、摘要列表。
 - `diagnostics.degraded=true`。
 - `diagnostics.grok_error.code=QUOTA_EXHAUSTED`。
-- `sources.grok=[]`。
+- `sources.items` 中只有 Tavily/Firecrawl 结果。
 
 `--no-extra` 会禁止这种接管。认证、协议、5xx 和超时错误也不会触发额度降级。
 

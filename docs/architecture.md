@@ -37,9 +37,9 @@ query
        ↓ 三路并行
   result JSON
        ├─ answer
-       ├─ sources.grok
-       ├─ sources.extra
-       ├─ sources.merged
+       ├─ sources.items（合并去重后按 citation > extra > searched 裁剪，默认 12 条）
+       ├─ sources.returned / total / omitted
+       ├─ sources.raw_path（被裁剪或有 provider raw 时）
        └─ diagnostics
 ```
 

@@ -35,7 +35,7 @@ export GROK_MODEL="grok-4.3"
 
 - `diagnostics.grok_endpoint` 为 `responses`；
 - 默认 `responses_max_turns` 为 3；
-- `sources.grok` 可含 `citation` / `searched`；
+- `sources.items` 可含 `citation` / `searched`，`sources.omitted` 标记裁剪；
 - 默认 extra allocation 在没有 Tavily key 时全部给 Firecrawl。
 
 ## OpenRouter
