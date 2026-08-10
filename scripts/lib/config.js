@@ -12,8 +12,8 @@ export class ConfigError extends Error {
 
 const DEFAULT_MODEL = "grok-4.3";
 const DEFAULT_EXTRA = 6;
-const DEFAULT_SOURCE_CHARS = 400;
-const DEFAULT_MAX_SOURCES = 12;
+export const DEFAULT_SOURCE_CHARS = 400;
+export const DEFAULT_MAX_SOURCES = 12;
 const DEFAULT_DEADLINE_SECONDS = 240;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
