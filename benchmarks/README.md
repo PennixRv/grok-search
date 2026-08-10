@@ -25,3 +25,11 @@ npm run benchmark:score
 ```
 
 Runs write raw responses to `benchmarks/results/`, which is intentionally ignored by Git. The historical experiment archive and internal reports remain under the separate local-only `.private/` directory.
+
+## Grader amendments
+
+The question set, truth snapshots, and official URLs stay frozen. Scoring regexes may gain
+synonym translations when a semantically correct answer is rejected on vocabulary alone:
+
+- 2026-08-10: the `rust` criterion for "symbol mangling v0" also accepts 修饰 (the
+  `rust-vs-deno` criterion already did); a correct answer phrased as 符号修饰 had scored as a miss.
