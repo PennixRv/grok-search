@@ -13,6 +13,8 @@ export class ConfigError extends Error {
 const DEFAULT_MODEL = "grok-4.3";
 const DEFAULT_EXTRA = 6;
 const DEFAULT_SOURCE_CHARS = 400;
+const DEFAULT_MAX_SOURCES = 12;
+const DEFAULT_DEADLINE_SECONDS = 240;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 const DEFAULT_OUTPUT_DIR = path.join(homedir(), ".cache", "grok-search", "outputs");
@@ -73,10 +75,17 @@ export function configFilePath() {
 }
 
 export async function loadConfigFile() {
+  let text;
   try {
-    return JSON.parse(await readFile(configFilePath(), "utf8"));
-  } catch {
-    return {};
+    text = await readFile(configFilePath(), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return {};
+    throw new ConfigError(`无法读取配置文件 ${configFilePath()}: ${error.message}`, "CONFIG_FILE_INVALID");
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new ConfigError(`配置文件 ${configFilePath()} 不是有效 JSON: ${error.message}`, "CONFIG_FILE_INVALID");
   }
 }
 
@@ -247,6 +256,16 @@ export async function loadConfig({ requireGrok = false } = {}) {
     sourceChars: envOrFileInt("GROK_SOURCE_CHARS", fileConfig, ["GROK_SOURCE_CHARS", "sourceChars", "source_chars"], DEFAULT_SOURCE_CHARS, {
       min: 0,
     }),
+    maxSources: envOrFileInt("GROK_MAX_SOURCES", fileConfig, ["GROK_MAX_SOURCES", "maxSources", "max_sources"], DEFAULT_MAX_SOURCES, {
+      min: 1,
+    }),
+    deadlineSeconds: envOrFileInt(
+      "GROK_DEADLINE_SECONDS",
+      fileConfig,
+      ["GROK_DEADLINE_SECONDS", "deadlineSeconds", "deadline_seconds"],
+      DEFAULT_DEADLINE_SECONDS,
+      { min: 0 }
+    ),
     outputDir,
     outputRetentionDays: DEFAULT_OUTPUT_RETENTION_DAYS,
     debug: envBool("GROK_DEBUG", false),
