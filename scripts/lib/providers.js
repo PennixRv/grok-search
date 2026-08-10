@@ -46,7 +46,7 @@ export function debugLog(config, message) {
   if (config?.debug) console.error(`[grok-search] ${message}`);
 }
 
-export async function requestJson(url, { headers, body, timeoutMs, config, retry = false }) {
+export async function requestJson(url, { headers, body, timeoutMs, config, retry = false, retryOnTimeout = true }) {
   const maxAttempts = retry ? config.retryMaxAttempts : 1;
   let lastError;
 
@@ -76,23 +76,28 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
       } catch (cause) {
         const error = new Error(`响应不是有效 JSON: ${redactSecrets(trimBody(text), config)}`);
         error.cause = cause;
+        // A stable but malformed response will not improve on retry.
+        error.retryable = false;
         throw error;
       }
     } catch (error) {
       clearTimeout(timer);
       if (error.name === "AbortError") {
         lastError = new Error(`请求超时（>${Math.round(timeoutMs / 1000)}s）`);
-        lastError.retryable = true;
+        // Timed-out POSTs may still be executing (and billing) server-side.
+        lastError.retryable = retryOnTimeout;
+        lastError.timedOut = true;
       } else {
         lastError = error;
       }
 
       const canRetry =
         attempt < maxAttempts - 1 &&
-        (lastError.retryable || !lastError.status || RETRYABLE_STATUS.has(lastError.status));
+        lastError.retryable !== false &&
+        (lastError.retryable === true || !lastError.status || RETRYABLE_STATUS.has(lastError.status));
       if (!canRetry) break;
 
-      const waitMs = lastError.retryAfterMs ?? backoffMs(config, attempt);
+      const waitMs = Math.min(lastError.retryAfterMs ?? backoffMs(config, attempt), config.retryMaxWait * 1000);
       debugLog(config, `retry ${attempt + 1}/${maxAttempts - 1} after ${Math.round(waitMs)}ms: ${lastError.message}`);
       await sleep(waitMs);
     }

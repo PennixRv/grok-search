@@ -354,6 +354,7 @@ export async function searchGrokResponses(query, options, config) {
     timeoutMs: 180_000,
     config,
     retry: true,
+    retryOnTimeout: false,
   });
 
   const defaultTool = config.apiProvider === "openrouter" ? "openrouter:web_search" : "web_search";
