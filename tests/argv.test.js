@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -24,6 +24,8 @@ async function runNode(args, env = {}) {
         FIRECRAWL_API_URL: "",
         GROK_DEFAULT_EXTRA: "",
         GROK_SOURCE_CHARS: "",
+        GROK_MAX_SOURCES: "",
+        GROK_DEADLINE_SECONDS: "",
         GROK_RESPONSES_MAX_TURNS: "",
         GROK_SEARCH_MODE: "",
         GROK_RESPONSES_FALLBACK_CHAT: "",
@@ -205,6 +207,11 @@ await withServer(
     assert.equal(output.diagnostics.options.extra_mode, "off");
     assert.deepEqual(output.diagnostics.provider_attempts, [{ provider: "grok-responses:xai", ok: true, count: 1 }]);
     assert.equal(output.diagnostics.cost_usd, 0.000015);
+    assert.equal(output.sources.items.length, 1);
+    assert.equal(output.sources.total, 1);
+    assert.equal(output.sources.omitted, 0);
+    assert.deepEqual(output.diagnostics.responses_tool_calls, { total: 1 });
+    assert.equal(typeof output.diagnostics.duration_ms, "number");
   }
 );
 
@@ -320,7 +327,10 @@ await withServer(
     assert.equal(searchResult.code, 0);
     const output = parseJson(searchResult.stdout);
     assert.equal(output.answer.text, "Parallel answer.");
-    assert.equal(output.sources.extra.length, 6);
+    assert.equal(output.sources.total, 7);
+    assert.equal(output.sources.omitted, 0);
+    assert.equal(output.sources.items.filter((source) => source.provider === "tavily").length, 3);
+    assert.equal(output.sources.items.filter((source) => source.provider === "firecrawl").length, 3);
     assert.deepEqual(output.diagnostics.options.extra_allocation, { tavily: 3, firecrawl: 3 });
     assert.equal(output.diagnostics.options.firecrawl_auth_mode, "keyless");
     assert.deepEqual(
@@ -355,7 +365,7 @@ await withServer(
     assert.equal(searchResult.code, 0);
     const output = parseJson(searchResult.stdout);
     assert.deepEqual(output.diagnostics.options.extra_allocation, { tavily: 0, firecrawl: 4 });
-    assert.equal(output.sources.extra.length, 1);
+    assert.equal(output.sources.items.filter((source) => source.provider === "firecrawl").length, 1);
   }
 );
 
@@ -437,8 +447,8 @@ await withServer(
     assert.equal(output.diagnostics.grok_error.code, "QUOTA_EXHAUSTED");
     assert.match(output.answer.text, /Grok Responses 额度已耗尽/);
     assert.match(output.answer.text, /Fallback source/);
-    assert.deepEqual(output.sources.grok, []);
-    assert.equal(output.sources.extra.length, 1);
+    assert.equal(output.sources.items.length, 1);
+    assert.equal(output.sources.items[0].provider, "firecrawl");
   }
 );
 
@@ -584,5 +594,95 @@ await withServer(
     assert.deepEqual(output.diagnostics.provider_attempts.map((attempt) => attempt.provider), ["tavily", "firecrawl", "direct"]);
   }
 );
+
+function manySourcesPayload(count) {
+  return {
+    output: [
+      {
+        type: "message",
+        content: [
+          {
+            type: "output_text",
+            text: "Many sources answer.",
+            annotations: [{ url: "https://official.example/cite", title: "Cited" }],
+          },
+        ],
+      },
+      {
+        type: "web_search_call",
+        status: "completed",
+        action: {
+          type: "search",
+          query: "many sources",
+          sources: Array.from({ length: count }, (_item, index) => ({
+            url: `https://searched.example/${index + 1}`,
+            title: `Searched ${index + 1}`,
+          })),
+        },
+      },
+    ],
+    usage: { input_tokens: 10, output_tokens: 5 },
+  };
+}
+
+await withServer(
+  (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(manySourcesPayload(20)));
+  },
+  async (_server, port) => {
+    const defaultCap = await runNode(["scripts/search.js", "--no-extra", "mock query"], baseGrokEnv(port));
+    assert.equal(defaultCap.code, 0);
+    let output = parseJson(defaultCap.stdout);
+    assert.equal(output.sources.total, 21);
+    assert.equal(output.sources.returned, 12);
+    assert.equal(output.sources.omitted, 9);
+    assert.equal(output.sources.items.length, 12);
+    assert.equal(output.sources.items[0].source_type, "citation");
+    assert.equal(typeof output.sources.raw_path, "string");
+    const rawPayload = JSON.parse(await readFile(output.sources.raw_path, "utf8"));
+    assert.equal(rawPayload.grok.length, 21);
+    assert.equal(rawPayload.grok_tool_calls.length, 1);
+    assert.equal(rawPayload.grok_tool_calls[0].query, "many sources");
+
+    const explicitCap = await runNode(["scripts/search.js", "--no-extra", "--max-sources", "3", "mock query"], baseGrokEnv(port));
+    output = parseJson(explicitCap.stdout);
+    assert.equal(output.sources.returned, 3);
+    assert.equal(output.sources.omitted, 18);
+    assert.equal(output.diagnostics.options.max_sources, 3);
+  }
+);
+
+await withServer(
+  (req) => {
+    // Never respond; the command-level deadline must fire first.
+    req.resume();
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(["scripts/search.js", "--no-extra", "--deadline", "1", "mock query"], baseGrokEnv(port, {
+      GROK_RETRY_MAX_ATTEMPTS: "1",
+    }));
+    assert.equal(searchResult.code, 1);
+    const output = parseJson(searchResult.stdout);
+    assertCommandErrorSchema(output, "searched_at", "DEADLINE_EXCEEDED");
+  }
+);
+
+{
+  const badConfigHome = await mkdtemp(path.join(tmpdir(), "grok-search-bad-config-"));
+  await mkdir(path.join(badConfigHome, ".config", "grok-search"), { recursive: true });
+  await writeFile(path.join(badConfigHome, ".config", "grok-search", "config.json"), "{ bad json", "utf8");
+  result = await runNode(["scripts/fetch.js", "--provider", "direct", "https://example.com/"], {
+    HOME: badConfigHome,
+    USERPROFILE: badConfigHome,
+  });
+  assert.equal(result.code, 1);
+  assertCommandErrorSchema(parseJson(result.stdout), "fetched_at", "CONFIG_FILE_INVALID");
+}
+
+result = await runNode(["scripts/fetch.js", "--provider", "direct", "https://example.com/"], { GROK_PROXY: "not-a-url" });
+assert.equal(result.code, 1);
+assertCommandErrorSchema(parseJson(result.stdout), "fetched_at", "PROXY_CONFIG_INVALID");
 
 console.log("argv fixtures ok");

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
+import { startDeadline } from "./lib/deadline.js";
 import { cleanupOutputDir, previewText, printJson } from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
+import { assertProxyUsable } from "./lib/proxy.js";
 
 const DEFAULT_MAX_CHARS = 12000;
 
 function usage() {
-  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] <url>
+  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] [--deadline SECONDS] <url>
 
 Fetch a web page as readable text/Markdown using Tavily Extract, Firecrawl Scrape, then Direct Fetch.
 
@@ -15,6 +17,8 @@ Environment:
   TAVILY_API_URL       Default: https://api.tavily.com
   FIRECRAWL_API_KEY    Optional Firecrawl key; keyless fallback works without it
   FIRECRAWL_API_URL    Default: https://api.firecrawl.dev/v2
+  GROK_DEADLINE_SECONDS
+                       Optional whole-command deadline; default 240, 0 disables
   GROK_OUTPUT_DIR      Optional directory for full content when preview is truncated
   GROK_RETRY_*         Retry tuning shared with grok-search scripts
 `;
@@ -31,6 +35,7 @@ function parseArgs(argv) {
   const args = [...argv];
   let provider = "auto";
   let maxChars = DEFAULT_MAX_CHARS;
+  let deadline = null;
   let url;
 
   while (args.length) {
@@ -52,6 +57,14 @@ function parseArgs(argv) {
     }
     if (arg?.startsWith("--max-chars=")) {
       maxChars = parseIntOption("--max-chars", arg.slice("--max-chars=".length), { min: 0 });
+      continue;
+    }
+    if (arg === "--deadline") {
+      deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
+      continue;
+    }
+    if (arg?.startsWith("--deadline=")) {
+      deadline = parseIntOption("--deadline", arg.slice("--deadline=".length), { min: 0 });
       continue;
     }
     if (arg?.startsWith("-")) {
@@ -78,7 +91,7 @@ function parseArgs(argv) {
     throw new Error("URL 必须使用 http 或 https 协议");
   }
 
-  return { url: parsed.toString(), provider, maxChars };
+  return { url: parsed.toString(), provider, maxChars, deadline };
 }
 
 async function publicResult(args, result, config) {
@@ -161,15 +174,27 @@ try {
 
   stage = "config";
   const config = await loadConfig({ requireGrok: false });
+  assertProxyUsable();
   await cleanupOutputDir(config);
   stage = "fetch";
-  const result = await fetchUrl(args.url, config, { provider: args.provider });
-  const output = await publicResult(args, result, config);
+  const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
+  const stopDeadline = startDeadline(deadlineSeconds, () => {
+    const error = new Error(`提取总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
+    printJson(errorOutput(error, "DEADLINE_EXCEEDED"));
+    console.error(error.message);
+    process.exit(1);
+  });
+  try {
+    const result = await fetchUrl(args.url, config, { provider: args.provider });
+    const output = await publicResult(args, result, config);
 
-  printJson(output);
-  if (output.error) {
-    console.error(output.error.message);
-    process.exitCode = 1;
+    printJson(output);
+    if (output.error) {
+      console.error(output.error.message);
+      process.exitCode = 1;
+    }
+  } finally {
+    stopDeadline();
   }
 } catch (error) {
   const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "fetch" ? "FETCH_ERROR" : "RUNTIME_ERROR");

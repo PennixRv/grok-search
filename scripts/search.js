@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { ConfigError, loadConfig, normalizeOpenRouterSearchEngine } from "./lib/config.js";
+import { startDeadline } from "./lib/deadline.js";
 import { searchGrokResponses } from "./lib/grok-responses.js";
 import { cleanupOutputDir, previewText, printJson, writeJsonOutput } from "./lib/output.js";
 import { firecrawlAuthMode, firecrawlSearch, tavilySearch } from "./lib/providers.js";
+import { assertProxyUsable, getProxyState } from "./lib/proxy.js";
 import {
   buildRawSourcesPayload,
   compactSources,
   hasRawSourceValues,
   mergeSources,
+  selectSources,
 } from "./lib/sources.js";
 
 const DEFAULT_MAX_CHARS = 30000;
@@ -15,7 +18,7 @@ const QUOTA_CODE_PATTERN = /insufficient[_-]?quota|quota[_-]?exhausted|credits?[
 const QUOTA_MESSAGE_PATTERN = /quota|credits?|balance|billing|rate[ _-]?limit|insufficient|额度|余额|计费|限流/i;
 
 function usage() {
-  return `Usage: ./scripts/search.js [--platform NAME] [--model MODEL] [--extra N|--no-extra] [--source-chars N] [--full-sources] [--max-chars N] <query>
+  return `Usage: ./scripts/search.js [--platform NAME] [--model MODEL] [--extra N|--no-extra] [--source-chars N] [--max-sources N] [--full-sources] [--max-chars N] [--deadline SECONDS] <query>
 
 Run a Responses-compatible Grok/OpenRouter web search and return JSON with independent Tavily/Firecrawl sources.
 
@@ -28,6 +31,9 @@ Environment:
                        Optional Responses max_turns; default 3
   GROK_DEFAULT_EXTRA   Optional total Tavily/Firecrawl source count; default 6
   GROK_SOURCE_CHARS    Optional source snippet size; default 400
+  GROK_MAX_SOURCES     Optional cap on returned source cards; default 12
+  GROK_DEADLINE_SECONDS
+                       Optional whole-command deadline; default 240, 0 disables
   TAVILY_API_KEY       Optional Tavily parallel source provider
   FIRECRAWL_API_KEY    Optional Firecrawl key; keyless search works without it
   GROK_OUTPUT_DIR      Optional directory for full answer when preview is truncated
@@ -63,8 +69,10 @@ function parseArgs(argv) {
   let extraSeen = false;
   let noExtraSeen = false;
   let sourceChars = null;
+  let maxSources = null;
   let fullSources = false;
   let maxChars = DEFAULT_MAX_CHARS;
+  let deadline = null;
   let responsesMaxTurns = null;
   let responsesReasoningEffort = "";
   let responsesAllowedDomains = null;
@@ -186,6 +194,22 @@ function parseArgs(argv) {
       sourceChars = parseIntOption("--source-chars", arg.slice("--source-chars=".length), { min: 0 });
       continue;
     }
+    if (arg === "--max-sources") {
+      maxSources = parseIntOption("--max-sources", args.shift(), { min: 1 });
+      continue;
+    }
+    if (arg?.startsWith("--max-sources=")) {
+      maxSources = parseIntOption("--max-sources", arg.slice("--max-sources=".length), { min: 1 });
+      continue;
+    }
+    if (arg === "--deadline") {
+      deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
+      continue;
+    }
+    if (arg?.startsWith("--deadline=")) {
+      deadline = parseIntOption("--deadline", arg.slice("--deadline=".length), { min: 0 });
+      continue;
+    }
     if (arg === "--full-sources") {
       fullSources = true;
       continue;
@@ -212,8 +236,10 @@ function parseArgs(argv) {
     extra,
     extraMode,
     sourceChars,
+    maxSources,
     fullSources,
     maxChars,
+    deadline,
     responsesMaxTurns,
     responsesReasoningEffort,
     responsesAllowedDomains,
@@ -348,11 +374,16 @@ function responsesDiagnosticOptions(searchOptions) {
   };
 }
 
-async function rawSourcesPath(config, args, rawPayload, rawSourceSets, compactSourceSets) {
+async function rawSourcesPath(config, args, rawPayload, { rawSources, compacted, omitted }) {
   const hasProviderRaw = Object.keys(rawPayload.provider_raw || {}).length > 0;
-  const hasHiddenSourceValues = rawSourceSets.some((sources, index) => hasRawSourceValues(sources, compactSourceSets[index]));
-  if (!args.fullSources && !hasProviderRaw && !hasHiddenSourceValues) return null;
+  const hasHiddenValues = omitted > 0 || hasRawSourceValues(rawSources, compacted);
+  if (!args.fullSources && !hasProviderRaw && !hasHiddenValues) return null;
   return writeJsonOutput(config, { kind: "sources", provider: "search", label: args.query, value: rawPayload });
+}
+
+function summarizeToolCalls(toolCalls) {
+  const failed = toolCalls.filter((call) => call.status && call.status !== "completed");
+  return { total: toolCalls.length, ...(failed.length ? { failed } : {}) };
 }
 
 async function grokChannel(args, config, searchOptions) {
@@ -375,12 +406,15 @@ async function grokChannel(args, config, searchOptions) {
   const diagnostics = { ...(grok.diagnostics || {}) };
   const warnings = [...(diagnostics.warnings || [])];
   delete diagnostics.warnings;
+  const toolCalls = Array.isArray(diagnostics.responses_tool_calls) ? diagnostics.responses_tool_calls : [];
+  diagnostics.responses_tool_calls = summarizeToolCalls(toolCalls);
   if (!grok.sources.length) warnings.push("No responses citations or searched sources were found.");
   return {
     endpoint: grok.endpoint,
     model: grok.model,
     answer: grok.content,
     sources: grok.sources,
+    tool_calls: toolCalls,
     warnings,
     provider_attempts: [{ provider: `grok-responses:${config.apiProvider}`, ok: true, count: grok.sources.length }],
     diagnostics,
@@ -451,8 +485,10 @@ function failureDiagnostics(config, searchOptions, extraOptions, extra, error, {
 }
 
 async function publicResult(args, config) {
+  const startedAtMs = Date.now();
   const searchOptions = resolveSearchOptions(args, config);
   const sourceChars = args.sourceChars ?? config.sourceChars;
+  const maxSources = args.maxSources ?? config.maxSources;
   const extraOptions = resolveExtra(args, config);
   const grokPromise = grokChannel(args, config, searchOptions).then(
     (value) => ({ ok: true, value }),
@@ -488,6 +524,7 @@ async function publicResult(args, config) {
       model: searchOptions.model,
       answer: degradedAnswer(extra.sources),
       sources: [],
+      tool_calls: [],
       warnings: [
         "Grok Responses 因额度耗尽不可用；当前 answer 仅包含 Tavily/Firecrawl 原始搜索结果，未经 Grok 综合生成。",
       ],
@@ -502,9 +539,9 @@ async function publicResult(args, config) {
   const rawGrokSources = grok.sources;
   const rawExtraSources = extra.sources;
   const rawMergedSources = mergeSources(rawGrokSources, rawExtraSources);
-  const grokCompact = compactSources(rawGrokSources, { sourceChars });
-  const extraCompact = compactSources(rawExtraSources, { sourceChars });
-  const mergedCompact = compactSources(rawMergedSources, { sourceChars });
+  const selected = selectSources(rawMergedSources, { maxSources });
+  const itemsCompact = compactSources(selected.items, { sourceChars });
+  const mergedCompactFull = compactSources(rawMergedSources, { sourceChars });
 
   const answerInfo = await previewText(config, {
     kind: "search",
@@ -521,16 +558,21 @@ async function publicResult(args, config) {
     extra: rawExtraSources,
     providerRaw: extra.provider_raw,
     providerAttempts,
+    grokToolCalls: grok.tool_calls,
     createdAt,
   });
-  const rawPath = await rawSourcesPath(
-    config,
-    args,
-    rawPayload,
-    [rawGrokSources, rawExtraSources, rawMergedSources],
-    [grokCompact, extraCompact, mergedCompact]
-  );
-  const sources = { grok: grokCompact, extra: extraCompact, merged: mergedCompact, raw_path: rawPath };
+  const rawPath = await rawSourcesPath(config, args, rawPayload, {
+    rawSources: rawMergedSources,
+    compacted: mergedCompactFull,
+    omitted: selected.omitted,
+  });
+  const sources = {
+    items: itemsCompact,
+    returned: selected.returned,
+    total: selected.total,
+    omitted: selected.omitted,
+    raw_path: rawPath,
+  };
   if (args.fullSources) sources.raw = rawPayload;
 
   return {
@@ -558,11 +600,14 @@ async function publicResult(args, config) {
         extra_allocation: extra.allocation,
         firecrawl_auth_mode: extraOptions.limit > 0 ? firecrawlAuthMode(config) : null,
         source_chars: sourceChars,
+        max_sources: maxSources,
         max_chars: args.maxChars,
         full_sources: args.fullSources,
+        ...(getProxyState().mode === "direct" ? {} : { proxy_mode: getProxyState().mode }),
         ...responsesDiagnosticOptions(searchOptions),
       },
       raw_grok_content_chars: grok.raw_content_chars,
+      duration_ms: Date.now() - startedAtMs,
       searched_at: createdAt,
     },
   };
@@ -589,9 +634,21 @@ try {
   }
   stage = "config";
   const config = await loadConfig({ requireGrok: true });
+  assertProxyUsable();
   await cleanupOutputDir(config);
   stage = "search";
-  printJson(await publicResult(args, config));
+  const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
+  const stopDeadline = startDeadline(deadlineSeconds, () => {
+    const error = new Error(`搜索总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
+    printJson(errorOutput(error, "DEADLINE_EXCEEDED"));
+    console.error(error.message);
+    process.exit(1);
+  });
+  try {
+    printJson(await publicResult(args, config));
+  } finally {
+    stopDeadline();
+  }
 } catch (error) {
   const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "search" ? "SEARCH_ERROR" : "RUNTIME_ERROR");
   printJson(errorOutput(error, code, error.diagnostics));

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
+import { startDeadline } from "./lib/deadline.js";
 import { cleanupOutputDir, printJson } from "./lib/output.js";
 import { mapUrl } from "./lib/providers.js";
+import { assertProxyUsable } from "./lib/proxy.js";
 
 const DEFAULTS = {
   provider: "auto",
@@ -13,13 +15,15 @@ const DEFAULTS = {
 };
 
 function usage() {
-  return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] <url>
+  return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--deadline SECONDS] <url>
 
 Discover same-site URLs with Tavily Map or a lightweight Direct Map fallback.
 
 Environment:
   TAVILY_API_KEY       Optional Tavily Map key
   TAVILY_API_URL       Default: https://api.tavily.com
+  GROK_DEADLINE_SECONDS
+                       Optional whole-command deadline; default 240, 0 disables
 `;
 }
 
@@ -86,6 +90,14 @@ function parseArgs(argv) {
     }
     if (arg?.startsWith("--timeout=")) {
       out.timeout = parseIntOption("--timeout", arg.slice("--timeout=".length), { min: 1 });
+      continue;
+    }
+    if (arg === "--deadline") {
+      out.deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
+      continue;
+    }
+    if (arg?.startsWith("--deadline=")) {
+      out.deadline = parseIntOption("--deadline", arg.slice("--deadline=".length), { min: 0 });
       continue;
     }
     if (arg?.startsWith("-")) throw new Error(`未知参数: ${arg}`);
@@ -171,14 +183,26 @@ try {
 
   stage = "config";
   const config = await loadConfig({ requireGrok: false });
+  assertProxyUsable();
   await cleanupOutputDir(config);
   stage = "map";
-  const result = await mapUrl(args.url, config, args);
-  const output = publicResult(args, result);
-  printJson(output);
-  if (output.error) {
-    console.error(output.error.message);
-    process.exitCode = 1;
+  const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
+  const stopDeadline = startDeadline(deadlineSeconds, () => {
+    const error = new Error(`映射总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
+    printJson(errorOutput(error, "DEADLINE_EXCEEDED"));
+    console.error(error.message);
+    process.exit(1);
+  });
+  try {
+    const result = await mapUrl(args.url, config, args);
+    const output = publicResult(args, result);
+    printJson(output);
+    if (output.error) {
+      console.error(output.error.message);
+      process.exitCode = 1;
+    }
+  } finally {
+    stopDeadline();
   }
 } catch (error) {
   const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "map" ? "MAP_ERROR" : "RUNTIME_ERROR");

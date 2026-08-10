@@ -102,6 +102,31 @@ export function compactSources(sources, options = {}) {
   return (sources || []).map((source) => compactSource(source, options)).filter(Boolean);
 }
 
+function sourceRank(source) {
+  const type = textField(source?.source_type);
+  if (type === "citation") return 0;
+  if (type === "searched") return 2;
+  return 1;
+}
+
+export function selectSources(sources, { maxSources } = {}) {
+  const list = sources || [];
+  const total = list.length;
+  const limit = Number.isFinite(maxSources) && maxSources > 0 ? maxSources : total;
+
+  let items = list;
+  if (total > limit) {
+    items = list
+      .map((source, index) => ({ source, index, rank: sourceRank(source) }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .slice(0, limit)
+      .sort((a, b) => a.index - b.index)
+      .map((entry) => entry.source);
+  }
+
+  return { items, total, returned: items.length, omitted: total - items.length };
+}
+
 export function hasRawSourceValue(source, compacted = compactSource(source)) {
   if (!source || !compacted) return false;
 
@@ -139,6 +164,7 @@ export function buildRawSourcesPayload({
   extra = [],
   providerRaw = {},
   providerAttempts = [],
+  grokToolCalls = [],
   createdAt = new Date().toISOString(),
 } = {}) {
   const provider_raw = {};
@@ -152,6 +178,7 @@ export function buildRawSourcesPayload({
     extra,
     provider_raw,
     provider_attempts: providerAttempts || [],
+    ...(grokToolCalls?.length ? { grok_tool_calls: grokToolCalls } : {}),
     created_at: createdAt,
   };
 }

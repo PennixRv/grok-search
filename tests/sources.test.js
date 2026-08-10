@@ -5,6 +5,7 @@ import {
   extractUniqueUrls,
   hasRawSourceValue,
   mergeSources,
+  selectSources,
   splitAnswerAndSources,
 } from "../scripts/lib/sources.js";
 
@@ -112,5 +113,27 @@ assert.equal(hasRawSourceValue({ provider: "grok", url: "https://example.com/b",
 
 const fullSnippet = compactSource({ provider: "grok", url: "https://example.com/c", snippet: "short" }, { sourceChars: 400 });
 assert.equal(hasRawSourceValue({ provider: "grok", url: "https://example.com/c", snippet: "short" }, fullSnippet), false);
+
+const rankedSources = [
+  { url: "https://e.example/1", source_type: "searched" },
+  { url: "https://e.example/2", provider: "tavily" },
+  { url: "https://e.example/3", source_type: "citation" },
+  { url: "https://e.example/4", source_type: "searched" },
+];
+const capped = selectSources(rankedSources, { maxSources: 2 });
+// Citation and extra-provider sources outrank searched-only ones; the picked
+// subset keeps the original order.
+assert.deepEqual(
+  capped.items.map((source) => source.url),
+  ["https://e.example/2", "https://e.example/3"]
+);
+assert.equal(capped.total, 4);
+assert.equal(capped.returned, 2);
+assert.equal(capped.omitted, 2);
+
+const uncapped = selectSources(rankedSources, { maxSources: 10 });
+assert.equal(uncapped.returned, 4);
+assert.equal(uncapped.omitted, 0);
+assert.deepEqual(selectSources([], { maxSources: 5 }), { items: [], total: 0, returned: 0, omitted: 0 });
 
 console.log("sources fixtures ok");
