@@ -1,5 +1,13 @@
 #!/usr/bin/env node
-import { ConfigError, loadConfig, normalizeOpenRouterSearchEngine } from "./lib/config.js";
+import {
+  ConfigError,
+  X_HANDLE_LIMIT,
+  loadConfig,
+  normalizeOpenRouterSearchEngine,
+  normalizeSearchSource,
+  usesWebSearch,
+  usesXSearch,
+} from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
 import { searchGrokResponses } from "./lib/grok-responses.js";
 import { cleanupOutputDir, previewText, printJson, writeJsonOutput } from "./lib/output.js";
@@ -18,15 +26,27 @@ const QUOTA_CODE_PATTERN = /insufficient[_-]?quota|quota[_-]?exhausted|credits?[
 const QUOTA_MESSAGE_PATTERN = /quota|credits?|balance|billing|rate[ _-]?limit|insufficient|额度|余额|计费|限流/i;
 
 function usage() {
-  return `Usage: ./scripts/search.js [--platform NAME] [--model MODEL] [--extra N|--no-extra] [--source-chars N] [--max-sources N] [--full-sources] [--max-chars N] [--deadline SECONDS] <query>
+  return `Usage: ./scripts/search.js [--source web|x|both] [--platform NAME] [--model MODEL] [--extra N|--no-extra] [--source-chars N] [--max-sources N] [--full-sources] [--max-chars N] [--deadline SECONDS] <query>
 
-Run a Responses-compatible Grok/OpenRouter web search and return JSON with independent Tavily/Firecrawl sources.
+Run a Responses-compatible Grok/OpenRouter search and return JSON with independent Tavily/Firecrawl sources.
+
+Search sources:
+  --source web         Grok web_search only (default)
+  --source x           Grok x_search only; search X posts, profiles, and threads
+  --source both        Grok decides between web_search and x_search
+  --x-from-date DATE   Restrict X posts to on/after DATE (YYYY-MM-DD); implies X search
+  --x-to-date DATE     Restrict X posts to on/before DATE (YYYY-MM-DD); implies X search
+  --x-images           Analyze images in X posts; billed as extra tokens
+  --x-videos           Analyze videos in X posts; billed as extra tokens
+  --no-x-images        Turn off image analysis enabled in config
+  --no-x-videos        Turn off video analysis enabled in config
 
 Environment:
   GROK_API_URL         Responses-compatible base URL; required
   GROK_API_KEY         API key for GROK_API_URL; required
   GROK_API_PROVIDER    Optional provider: xai, openrouter, or openai-compatible
   GROK_MODEL           Optional default model; default grok-4.3
+  GROK_SEARCH_SOURCE   Optional default search source: web, x, or both; default web
   GROK_RESPONSES_MAX_TURNS
                        Optional Responses max_turns; default 3
   GROK_DEFAULT_EXTRA   Optional total Tavily/Firecrawl source count; default 6
@@ -59,6 +79,19 @@ function parseListArg(name, value) {
   return parseListOption(value);
 }
 
+function parseDateOption(name, value) {
+  const date = String(value || "").trim();
+  if (!date) throw new Error(`${name} 缺少值`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${name} 必须是 ISO8601 日期（YYYY-MM-DD）`);
+  // Date.parse rolls overflowing days over (2026-02-30 becomes Mar 2) instead of failing,
+  // so compare the round-trip rather than just checking for NaN.
+  const timestamp = Date.parse(`${date}T00:00:00Z`);
+  if (Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
+    throw new Error(`${name} 不是有效日期: ${date}`);
+  }
+  return date;
+}
+
 function parseArgs(argv) {
   const args = [...argv];
   const queryParts = [];
@@ -77,9 +110,13 @@ function parseArgs(argv) {
   let responsesReasoningEffort = "";
   let responsesAllowedDomains = null;
   let responsesExcludedDomains = null;
-  let responsesIncludeXSearch = null;
+  let searchSource = "";
   let responsesAllowedXHandles = null;
   let responsesExcludedXHandles = null;
+  let xFromDate = "";
+  let xToDate = "";
+  let xImageUnderstanding = null;
+  let xVideoUnderstanding = null;
   let responsesOpenRouterEngine = "";
 
   while (args.length) {
@@ -136,8 +173,51 @@ function parseArgs(argv) {
       responsesExcludedDomains = parseListOption(arg.slice("--responses-excluded-domains=".length));
       continue;
     }
+    if (arg === "--source") {
+      searchSource = args.shift() || "";
+      if (!searchSource) throw new Error("--source 缺少值");
+      continue;
+    }
+    if (arg?.startsWith("--source=")) {
+      searchSource = arg.slice("--source=".length);
+      if (!searchSource) throw new Error("--source 缺少值");
+      continue;
+    }
+    // Legacy aliases: the boolean switch is now the "both" mode.
     if (arg === "--responses-x-search" || arg === "--responses-include-x-search") {
-      responsesIncludeXSearch = true;
+      searchSource = "both";
+      continue;
+    }
+    if (arg === "--x-from-date") {
+      xFromDate = parseDateOption("--x-from-date", args.shift());
+      continue;
+    }
+    if (arg?.startsWith("--x-from-date=")) {
+      xFromDate = parseDateOption("--x-from-date", arg.slice("--x-from-date=".length));
+      continue;
+    }
+    if (arg === "--x-to-date") {
+      xToDate = parseDateOption("--x-to-date", args.shift());
+      continue;
+    }
+    if (arg?.startsWith("--x-to-date=")) {
+      xToDate = parseDateOption("--x-to-date", arg.slice("--x-to-date=".length));
+      continue;
+    }
+    if (arg === "--x-images") {
+      xImageUnderstanding = true;
+      continue;
+    }
+    if (arg === "--no-x-images") {
+      xImageUnderstanding = false;
+      continue;
+    }
+    if (arg === "--x-videos") {
+      xVideoUnderstanding = true;
+      continue;
+    }
+    if (arg === "--no-x-videos") {
+      xVideoUnderstanding = false;
       continue;
     }
     if (arg === "--responses-allowed-x-handles") {
@@ -228,6 +308,10 @@ function parseArgs(argv) {
 
   const query = queryParts.join(" ").trim();
   if (!query) throw new Error("缺少 query");
+  if (xFromDate && xToDate && xFromDate > xToDate) throw new Error("--x-from-date 不能晚于 --x-to-date");
+  // Reject an unknown source here so it fails like every other argument error, instead of
+  // after config load and output-dir cleanup.
+  if (searchSource) normalizeSearchSource(searchSource);
 
   return {
     query,
@@ -244,9 +328,13 @@ function parseArgs(argv) {
     responsesReasoningEffort,
     responsesAllowedDomains,
     responsesExcludedDomains,
-    responsesIncludeXSearch,
+    searchSource,
     responsesAllowedXHandles,
     responsesExcludedXHandles,
+    xFromDate,
+    xToDate,
+    xImageUnderstanding,
+    xVideoUnderstanding,
     responsesOpenRouterEngine,
   };
 }
@@ -305,13 +393,6 @@ function resolveExtra(args, config) {
   if (args.extraMode === "off") return { limit: 0, mode: "off" };
   if (args.extraMode === "explicit") return { limit: args.extra, mode: "explicit" };
   return { limit: config.defaultExtra, mode: "auto" };
-}
-
-function exclusiveOptionPair(argsLeft, argsRight, configLeft, configRight) {
-  if (argsLeft != null || argsRight != null) {
-    return { left: argsLeft == null ? [] : [...argsLeft], right: argsRight == null ? [] : [...argsRight] };
-  }
-  return { left: [...(configLeft || [])], right: [...(configRight || [])] };
 }
 
 function dedupeFilterValues(values) {
@@ -413,6 +494,37 @@ function validateMaxItems(list, name, max) {
   if (list.length > max) throw new ConfigError(`${name} 最多支持 ${max} 个值`, "RESPONSES_FILTER_LIMIT");
 }
 
+/**
+ * Only command-line X options imply X search. Configured handle lists and media flags
+ * are standing preferences for when X search runs; letting them switch the source on
+ * would turn a configured restriction into a billed extra search channel.
+ */
+function xOptionsRequested(args) {
+  return Boolean(
+    args.responsesAllowedXHandles?.length ||
+      args.responsesExcludedXHandles?.length ||
+      args.xFromDate ||
+      args.xToDate ||
+      args.xImageUnderstanding ||
+      args.xVideoUnderstanding
+  );
+}
+
+function resolveSearchSource(args, config) {
+  const legacyBoth = !config.responsesSearchSource && config.responsesIncludeXSearch;
+  const configured = config.responsesSearchSource || (legacyBoth ? "both" : "");
+  const requested = args.searchSource || configured;
+  const source = normalizeSearchSource(requested || "web");
+  const explicit = Boolean(requested);
+  if (!xOptionsRequested(args) || usesXSearch(source)) return { source, explicit };
+  // X-specific filters are meaningless without X search: promote a defaulted source,
+  // but never silently override an explicit --source web.
+  if (args.searchSource) {
+    throw new ConfigError("--source web 与 X 过滤参数（handles / dates / media）冲突", "SEARCH_SOURCE_CONFLICT");
+  }
+  return { source: "both", explicit };
+}
+
 function resolveSearchOptions(args, config) {
   const domainFilters = resolveFilterPair({
     argsAllowed: args.responsesAllowedDomains,
@@ -423,21 +535,28 @@ function resolveSearchOptions(args, config) {
     excludedName: "responses excluded domains",
     max: 5,
   });
-  const xHandleFilters = exclusiveOptionPair(
-    args.responsesAllowedXHandles,
-    args.responsesExcludedXHandles,
-    config.responsesAllowedXHandles,
-    config.responsesExcludedXHandles
-  );
+  const xHandleFilters = resolveFilterPair({
+    argsAllowed: args.responsesAllowedXHandles,
+    argsExcluded: args.responsesExcludedXHandles,
+    configAllowed: config.responsesAllowedXHandles,
+    configExcluded: config.responsesExcludedXHandles,
+    allowedName: "responses allowed X handles",
+    excludedName: "responses excluded X handles",
+    max: X_HANDLE_LIMIT,
+  });
   const allowedDomains = domainFilters.allowed;
   const excludedDomains = domainFilters.excluded;
-  const allowedXHandles = xHandleFilters.left;
-  const excludedXHandles = xHandleFilters.right;
+  const allowedXHandles = xHandleFilters.allowed;
+  const excludedXHandles = xHandleFilters.excluded;
 
   validateExclusiveLists(allowedDomains, excludedDomains, "responses allowed domains", "responses excluded domains");
   validateExclusiveLists(allowedXHandles, excludedXHandles, "responses allowed X handles", "responses excluded X handles");
   validateMaxItems(allowedDomains, "responses allowed domains", 5);
   validateMaxItems(excludedDomains, "responses excluded domains", 5);
+  validateMaxItems(allowedXHandles, "responses allowed X handles", X_HANDLE_LIMIT);
+  validateMaxItems(excludedXHandles, "responses excluded X handles", X_HANDLE_LIMIT);
+
+  const source = resolveSearchSource(args, config);
 
   return {
     model: args.model || config.grokModel,
@@ -445,12 +564,46 @@ function resolveSearchOptions(args, config) {
     reasoningEffort: args.responsesReasoningEffort || config.responsesReasoningEffort,
     allowedDomains,
     excludedDomains,
-    includeXSearch:
-      (args.responsesIncludeXSearch ?? config.responsesIncludeXSearch) || Boolean(allowedXHandles.length || excludedXHandles.length),
+    searchSource: source.source,
+    explicitSearchSource: source.explicit,
     allowedXHandles,
     excludedXHandles,
+    xFromDate: args.xFromDate,
+    xToDate: args.xToDate,
+    xImageUnderstanding: args.xImageUnderstanding ?? config.responsesXImageUnderstanding,
+    xVideoUnderstanding: args.xVideoUnderstanding ?? config.responsesXVideoUnderstanding,
     openRouterEngine: normalizeOpenRouterSearchEngine(args.responsesOpenRouterEngine || config.responsesOpenRouterEngine),
   };
+}
+
+/**
+ * OpenRouter attaches x_search to native web search for xAI models with no way to turn
+ * either side off, so the requested source is only a hint there. Say so rather than
+ * letting the diagnostics claim a mode that was not enforced.
+ */
+function searchSourceWarnings(searchOptions, config) {
+  const warnings = [];
+  if (config.apiProvider !== "openrouter") return warnings;
+
+  const { searchSource, openRouterEngine } = searchOptions;
+  const nativeCapable = openRouterEngine === "auto" || openRouterEngine === "native";
+
+  if (!usesXSearch(searchSource)) {
+    // Only worth saying when the caller actually asked for web-only; on the default path
+    // it is unactionable noise on every single OpenRouter search.
+    if (nativeCapable && searchOptions.explicitSearchSource) {
+      warnings.push("OpenRouter may attach x_search to native web search for xAI models; --source web is not enforced there.");
+    }
+    return warnings;
+  }
+
+  if (!usesWebSearch(searchSource)) {
+    warnings.push("OpenRouter cannot run x_search alone; web search stays enabled alongside it.");
+  }
+  if (!nativeCapable) {
+    warnings.push(`OpenRouter engine "${openRouterEngine}" replaces native search, so x_search and its filters do not run.`);
+  }
+  return warnings;
 }
 
 function responsesDiagnosticOptions(searchOptions) {
@@ -459,9 +612,17 @@ function responsesDiagnosticOptions(searchOptions) {
     responses_reasoning_effort: searchOptions.reasoningEffort,
     responses_allowed_domains: searchOptions.allowedDomains,
     responses_excluded_domains: searchOptions.excludedDomains,
-    responses_include_x_search: searchOptions.includeXSearch,
-    responses_allowed_x_handles: searchOptions.allowedXHandles,
-    responses_excluded_x_handles: searchOptions.excludedXHandles,
+    search_source: searchOptions.searchSource,
+    ...(usesXSearch(searchOptions.searchSource)
+      ? {
+          responses_allowed_x_handles: searchOptions.allowedXHandles,
+          responses_excluded_x_handles: searchOptions.excludedXHandles,
+          ...(searchOptions.xFromDate ? { x_from_date: searchOptions.xFromDate } : {}),
+          ...(searchOptions.xToDate ? { x_to_date: searchOptions.xToDate } : {}),
+          ...(searchOptions.xImageUnderstanding ? { x_image_understanding: true } : {}),
+          ...(searchOptions.xVideoUnderstanding ? { x_video_understanding: true } : {}),
+        }
+      : {}),
     responses_openrouter_engine: searchOptions.openRouterEngine,
   };
 }
@@ -473,9 +634,9 @@ async function rawSourcesPath(config, args, rawPayload, { rawSources, compacted,
   return writeJsonOutput(config, { kind: "sources", provider: "search", label: args.query, value: rawPayload });
 }
 
-function summarizeToolCalls(toolCalls) {
+function summarizeToolCalls(toolCalls, total) {
   const failed = toolCalls.filter((call) => call.status && call.status !== "completed");
-  return { total: toolCalls.length, ...(failed.length ? { failed } : {}) };
+  return { total, ...(failed.length ? { failed } : {}) };
 }
 
 async function grokChannel(args, config, searchOptions) {
@@ -488,9 +649,13 @@ async function grokChannel(args, config, searchOptions) {
       reasoningEffort: searchOptions.reasoningEffort,
       allowedDomains: searchOptions.allowedDomains,
       excludedDomains: searchOptions.excludedDomains,
-      includeXSearch: searchOptions.includeXSearch,
+      searchSource: searchOptions.searchSource,
       allowedXHandles: searchOptions.allowedXHandles,
       excludedXHandles: searchOptions.excludedXHandles,
+      xFromDate: searchOptions.xFromDate,
+      xToDate: searchOptions.xToDate,
+      xImageUnderstanding: searchOptions.xImageUnderstanding,
+      xVideoUnderstanding: searchOptions.xVideoUnderstanding,
       openRouterEngine: searchOptions.openRouterEngine,
     },
     config
@@ -499,7 +664,9 @@ async function grokChannel(args, config, searchOptions) {
   const warnings = [...(diagnostics.warnings || [])];
   delete diagnostics.warnings;
   const toolCalls = Array.isArray(diagnostics.responses_tool_calls) ? diagnostics.responses_tool_calls : [];
-  diagnostics.responses_tool_calls = summarizeToolCalls(toolCalls);
+  const toolCallTotal = diagnostics.responses_tool_call_total ?? toolCalls.length;
+  delete diagnostics.responses_tool_call_total;
+  diagnostics.responses_tool_calls = summarizeToolCalls(toolCalls, toolCallTotal);
   if (!grok.sources.length) warnings.push("No responses citations or searched sources were found.");
   return {
     endpoint: grok.endpoint,
@@ -626,7 +793,7 @@ async function publicResult(args, config) {
     };
   }
 
-  const warnings = [...grok.warnings, ...extra.warnings];
+  const warnings = [...searchSourceWarnings(searchOptions, config), ...grok.warnings, ...extra.warnings];
   const providerAttempts = [...grok.provider_attempts, ...extra.provider_attempts];
   const rawGrokSources = grok.sources;
   const rawExtraSources = extra.sources;

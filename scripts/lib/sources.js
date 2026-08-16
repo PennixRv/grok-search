@@ -1,5 +1,75 @@
+const X_HOST_PATTERN = /^(?:www\.|mobile\.|m\.)?(?:x\.com|twitter\.com)$/i;
+// Path segments X reserves for its own routes; none of them is a user handle.
+const X_RESERVED_HANDLES = new Set([
+  "i",
+  "home",
+  "explore",
+  "notifications",
+  "messages",
+  "search",
+  "settings",
+  "compose",
+  "intent",
+  "hashtag",
+  "share",
+  "status",
+  "statuses",
+  "about",
+  "tos",
+  "privacy",
+  "login",
+  "logout",
+  "signup",
+  "download",
+  "jobs",
+]);
+
 function trimUrl(value) {
   return String(value || "").replace(/[.,;:!?，。、；：！？》）】)]+$/g, "");
+}
+
+function xHandleSegment(segment) {
+  const handle = String(segment || "").trim();
+  if (!handle || X_RESERVED_HANDLES.has(handle.toLowerCase())) return "";
+  return /^[A-Za-z0-9_]{1,15}$/.test(handle) ? handle : "";
+}
+
+/**
+ * Extract the handle and post id an X citation carries in its URL. Grok returns X
+ * citations as bare URLs whose title is only the inline citation marker, so the URL
+ * is the sole free source of attribution.
+ */
+export function parseXPostUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(trimUrl(String(url || "").trim()));
+  } catch {
+    return null;
+  }
+
+  if (!X_HOST_PATTERN.test(parsed.hostname)) return null;
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const statusIndex = segments.findIndex((segment) => segment === "status" || segment === "statuses");
+
+  if (statusIndex < 1) {
+    const handle = segments.length === 1 ? xHandleSegment(segments[0]) : "";
+    return handle ? { x_handle: handle } : null;
+  }
+
+  const postId = segments[statusIndex + 1];
+  if (!/^\d+$/.test(postId || "")) return null;
+  // Only /<handle>/status/<id> names its author. Deeper forms such as /i/web/status/<id>
+  // put an internal route segment there, which must not be read as a handle.
+  const handle = statusIndex === 1 ? xHandleSegment(segments[0]) : "";
+  return { ...(handle ? { x_handle: handle } : {}), x_post_id: postId };
+}
+
+export function isXUrl(url) {
+  try {
+    return X_HOST_PATTERN.test(new URL(trimUrl(String(url || "").trim())).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeSourceUrl(url) {
@@ -68,6 +138,12 @@ export function compactSource(source, { sourceChars = 400 } = {}) {
   const tool = textField(source?.tool);
   if (tool) out.tool = tool;
 
+  const xHandle = textField(source?.x_handle);
+  if (xHandle) out.x_handle = xHandle;
+
+  const xPostId = textField(source?.x_post_id);
+  if (xPostId) out.x_post_id = xPostId;
+
   const snippet = clipText(sourceSnippet(source), sourceChars);
   if (snippet) out.snippet = snippet;
 
@@ -119,6 +195,8 @@ export function hasRawSourceValue(source, compacted = compactSource(source)) {
     if (key === "title" && textField(value) === compacted.title) continue;
     if (key === "source_type" && textField(value) === compacted.source_type) continue;
     if (key === "tool" && textField(value) === compacted.tool) continue;
+    if (key === "x_handle" && textField(value) === compacted.x_handle) continue;
+    if (key === "x_post_id" && textField(value) === compacted.x_post_id) continue;
     if (key === "score" && Number.isFinite(value) && value === compacted.score) continue;
     if (key === "published_date" && textField(value) === compacted.published_date) continue;
 

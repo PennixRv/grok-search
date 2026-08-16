@@ -20,6 +20,18 @@ Decide before running, by what the user already gave you:
 
 Do not chain map → fetch → search by default. Run the fewest commands that answer the question. If sub-questions are independent (different sites, unrelated facts), launch the commands in parallel instead of sequentially.
 
+## Choose The Search Source
+
+`search.js` defaults to web search. Add `--source` when X (Twitter) is the better evidence:
+
+- `--source x` — the question is about X itself: reactions, sentiment, what people are saying, what a named account posted, a thread, or a claim that is only circulating on X.
+- `--source both` — a current event where reaction and reporting both matter, or a fast-moving topic where web coverage may lag X by hours.
+- Default (omit `--source`) — everything else. Documentation, releases, versions, prices, specs, how-to questions. X is not a source for these.
+
+X posts are personal statements, not published sources. Attribute each one to its handle and date, keep claims separate from confirmations, and do not treat repetition across accounts as corroboration. When a fact has an official source, confirm it there and use X only for reaction, timing, or first-hand experience. X search bills $5 per 1k calls, the same as web search; `diagnostics.responses_x_search_calls` reports what a run actually used.
+
+`--source x` sends only `x_search`, so Grok cannot fall back to the web. Use `--source both` if the answer may need either.
+
 Write search queries as plain keywords. Web search cannot execute code-search operators — `repo:owner/name`, `path:`, `language:` and similar GitHub/grep syntax make the backend thrash through query variants at your expense. To scope a search to GitHub, use `--responses-allowed-domains github.com` plus ordinary keywords instead. Budget roughly 2 searches per question: if two well-formed queries have not surfaced the answer, fetch the most promising URL you already have rather than trying more phrasings.
 
 ## Commands
@@ -31,8 +43,18 @@ Write search queries as plain keywords. Web search cannot execute code-search op
 ./scripts/search.js --no-extra "query"
 ./scripts/search.js --source-chars 200 "query"
 ./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
 ```
+
+```bash
+./scripts/search.js --source x "what is X saying about the outage"
+./scripts/search.js --source both "reaction to the release"
+./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
+./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+```
+
+`--responses-allowed-x-handles` and `--responses-excluded-x-handles` are mutually exclusive, max 20 each, and either one implies X search. Dates are `YYYY-MM-DD` and must be real calendar dates. `--x-images` / `--x-videos` analyze media inside posts and are billed as extra tokens — enable them only when the question is about the media itself.
+
+The config file may already restrict domains or handles. Those restrictions hold: a filter flag can narrow them further, but requesting something they exclude fails with `RESPONSES_FILTER_FORBIDDEN` or `RESPONSES_FILTER_EMPTY` rather than silently widening the search. Drop the flag or pick a value inside the configured set.
 
 ```bash
 ./scripts/fetch.js https://example.com
@@ -61,6 +83,7 @@ Check in this order:
 - `diagnostics.warnings` and `diagnostics.provider_attempts` — these tell you which providers were skipped, failed, or produced content.
 - Search success: read `answer.text`, then `sources.items` (one merged list, capped at 12 by default). Source cards are short and use `snippet`, not `description` or `content`. `sources.omitted > 0` means the list was truncated; the full list is in `sources.raw_path` — read it in chunks only when the visible cards are not enough.
 - Search: inspect `diagnostics.grok_endpoint`, `diagnostics.degraded`, `diagnostics.cost_usd`, provider attempts, and each item's `source_type` (`citation` = used in the answer, `searched` = merely visited) before treating sources as evidence.
+- X sources: cards carry `x_handle` and `x_post_id` whenever the URL is an X post, plus `tool: "x_search"` when X search was actually mounted — under `--source web` an x.com card came from web search and is labeled as such. The card has no post text or date — those live in `answer.text`, which attributes each X claim to its handle and date. Cite the handle, not a bare URL. Extras (Tavily/Firecrawl) never search X, so on `--source x` any non-X card in the list came from the web and is a separate channel; pair `--source x` with `--no-extra` when you want X evidence only.
 - Fetch success: read `content.text`. If `content.truncated` is true and the preview is enough, stop. If more is needed, read `content.full_path` in chunks or rerun once with a deliberate larger `--max-chars`.
 - Map success: read `urls`, choose the best candidates, then fetch only the few URLs you need.
 

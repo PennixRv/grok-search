@@ -9,7 +9,6 @@
 ./scripts/search.js --platform GitHub "pi coding agent search skill"
 ./scripts/search.js --extra 10 "latest AI model release notes"
 ./scripts/search.js --no-extra "only use Grok Responses"
-./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "latest xAI news"
 ./scripts/search.js --responses-openrouter-engine exa "latest official release notes"
 ```
 
@@ -18,13 +17,25 @@
 - model：`grok-4.3`
 - `max_turns=3`
 - `reasoning.effort=low`
-- xAI/openai-compatible：`web_search`
+- xAI/openai-compatible：按 `--source` 挂 `web_search` / `x_search`，默认只挂 `web_search`
 - OpenRouter：`openrouter:web_search`
+
+### 检索源
+
+```bash
+./scripts/search.js --source x "X 上怎么评价 grok-4.6"
+./scripts/search.js --source both "grok-4.6 发布后的反响"
+./scripts/search.js --source x --x-from-date 2026-08-01 "query"
+./scripts/search.js --responses-x-search "query"   # 等价 --source both
+```
+
+`web` / `x` / `both` 三档决定挂哪些工具。启用 X 时会追加一条 X 证据准则 system message（署名 handle + 日期、区分声称与证实、热度不等于真实性、约 4 次 X 检索预算），基础 prompt 仍是第一条以保持 cache 前缀稳定。详见 `responses-mode.md`。
 
 Responses sources 与 extra sources 去重合并后写入 `sources.items`（默认最多 12 条，`--max-sources` 可调；`sources.omitted` 标记裁剪量），每条可能包含：
 
 - `source_type: citation | searched`（extra provider 的结果没有该字段）
 - `tool: web_search | x_search | openrouter:web_search`
+- `x_handle` / `x_post_id`（X 来源专有，从 URL 解析）
 
 ### 独立补充信源
 
@@ -93,7 +104,12 @@ Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
 | `GROK_RESPONSES_REASONING_EFFORT` | 默认 `low` |
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | Web Search allow-list，最多 5 个 |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | Web Search deny-list，最多 5 个 |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | 启用 xAI `x_search` |
+| `GROK_SEARCH_SOURCE` | 默认检索源 `web` / `x` / `both`，默认 `web` |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | 旧布尔开关，等价 `both` |
+| `GROK_RESPONSES_ALLOWED_X_HANDLES` | X handle allow-list，最多 20 个 |
+| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | X handle deny-list，最多 20 个 |
+| `GROK_X_IMAGE_UNDERSTANDING` | 分析 X 帖子图片，按 token 计费 |
+| `GROK_X_VIDEO_UNDERSTANDING` | 分析 X 帖子视频，按 token 计费 |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | OpenRouter search engine，默认 `auto` |
 | `GROK_DEFAULT_EXTRA` | Tavily/Firecrawl 合计默认数量，默认 `6` |
 | `TAVILY_API_KEY` | Tavily Search/Extract/Map |

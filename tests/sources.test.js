@@ -1,6 +1,47 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { compactSource, hasRawSourceValue, mergeSources, selectSources } from "../scripts/lib/sources.js";
+import { compactSource, hasRawSourceValue, mergeSources, parseXPostUrl, selectSources } from "../scripts/lib/sources.js";
+
+assert.deepEqual(parseXPostUrl("https://x.com/xai/status/1975607901571199086"), {
+  x_handle: "xai",
+  x_post_id: "1975607901571199086",
+});
+assert.deepEqual(parseXPostUrl("https://twitter.com/elonmusk/statuses/123?s=20"), { x_handle: "elonmusk", x_post_id: "123" });
+assert.deepEqual(parseXPostUrl("https://mobile.x.com/xai/status/123"), { x_handle: "xai", x_post_id: "123" });
+assert.deepEqual(parseXPostUrl("https://x.com/xai/status/123/photo/1"), { x_handle: "xai", x_post_id: "123" });
+// X's own routes are not handles. Only /<handle>/status/<id> names an author, so the
+// canonical /i/web/status/<id> form must not be attributed to "@web".
+assert.deepEqual(parseXPostUrl("https://x.com/i/status/1975607901571199086"), { x_post_id: "1975607901571199086" });
+assert.deepEqual(parseXPostUrl("https://x.com/i/web/status/1975607901571199086"), { x_post_id: "1975607901571199086" });
+// Profile URLs from user search still yield attribution.
+assert.deepEqual(parseXPostUrl("https://x.com/xai"), { x_handle: "xai" });
+assert.equal(parseXPostUrl("https://x.com/about"), null);
+assert.equal(parseXPostUrl("https://x.com/login"), null);
+assert.equal(parseXPostUrl("https://x.com/i/user/1912644073896206336"), null);
+assert.equal(parseXPostUrl("https://x.com/xai/status/not-a-number"), null);
+assert.equal(parseXPostUrl("https://example.com/xai/status/123"), null);
+assert.equal(parseXPostUrl("https://notx.com/xai/status/123"), null);
+assert.equal(parseXPostUrl(""), null);
+
+const xCompacted = compactSource(
+  { provider: "grok-responses", url: "https://x.com/xai/status/123", title: "@xai", x_handle: "xai", x_post_id: "123" },
+  { sourceChars: 400 }
+);
+assert.deepEqual(xCompacted, {
+  provider: "grok-responses",
+  url: "https://x.com/xai/status/123",
+  title: "@xai",
+  x_handle: "xai",
+  x_post_id: "123",
+});
+// X fields survive compaction, so they must not force a raw-sources dump.
+assert.equal(
+  hasRawSourceValue(
+    { provider: "grok-responses", url: "https://x.com/xai/status/123", title: "@xai", x_handle: "xai", x_post_id: "123" },
+    xCompacted
+  ),
+  false
+);
 
 assert.deepEqual(
   mergeSources([{ url: "https://A.example/path/" }], [{ url: "https://a.example/path#section" }, { url: "https://b.example/" }]).map(

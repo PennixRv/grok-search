@@ -41,14 +41,47 @@
 }
 ```
 
-X 搜索：
+固定推理模型或名称包含 `non-reasoning` 的模型不会发送可配置 reasoning 字段。
+
+## 检索源（`--source`）
+
+`--source` 决定挂哪些 Grok 服务端工具，默认 `web`：
+
+| 模式 | tools | 用途 |
+| --- | --- | --- |
+| `web` | `web_search` | 默认；网页与官方文档 |
+| `x` | `x_search` | 只查 X 帖子、账号、thread |
+| `both` | `web_search` + `x_search` | 由 Grok 自行路由 |
 
 ```bash
-./scripts/search.js --responses-x-search "query"
-./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
+./scripts/search.js --source x "X 上怎么评价 grok-4.6"
+./scripts/search.js --source both "grok-4.6 发布后的反响"
+./scripts/search.js --source x --responses-allowed-x-handles xai,elonmusk "query"
+./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
 ```
 
-固定推理模型或名称包含 `non-reasoning` 的模型不会发送可配置 reasoning 字段。
+`x_search` 的过滤参数放在 tool 对象上（不是 `filters`）：
+
+```json
+{
+  "type": "x_search",
+  "allowed_x_handles": ["xai"],
+  "from_date": "2026-08-01",
+  "to_date": "2026-08-16",
+  "enable_image_understanding": true,
+  "enable_video_understanding": true
+}
+```
+
+- `allowed_x_handles` 与 `excluded_x_handles` 互斥，各自上限 20。
+- 日期必须是 `YYYY-MM-DD`，且 `from` 不得晚于 `to`；`2026-02-30` 这类溢出日期会被拒绝而不是滚到下个月。
+- `--x-images` / `--x-videos` 默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关。
+- **命令行**的 X 过滤参数会把未显式指定的 `--source` 提升为 `both`；显式 `--source web` 与它们同时出现会报 `SEARCH_SOURCE_CONFLICT`。配置文件里的 handle 清单与媒体开关不会提升档位——它们是「X 检索运行时该怎么过滤」的偏好，不是开启一条额外计费检索通道的请求。
+- 启用 X 时会追加第二条 system message（X 证据准则），基础 prompt 仍是第一条，保持 prompt cache 前缀稳定。
+- `--responses-x-search` / `--responses-include-x-search` 保留为 `--source both` 的别名。
+- 配置项 `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` 仍等价 `both`，但优先级低于 `--source` 和 `GROK_SEARCH_SOURCE`；值为 `false` 或缺失时与不存在完全等价。
+
+X 检索计费为 $5 / 1k calls，与 web search 同价；实际调用次数见 `diagnostics.responses_x_search_calls`。
 
 ## OpenRouter
 
@@ -81,24 +114,39 @@ auto | native | exa | firecrawl | parallel | perplexity
 
 模型名不会自动追加 `:online`。
 
+OpenRouter 对 xAI 模型会**自动**把 `x_search` 挂在 native web search 上，既不能单独关闭也不能只用 X，唯一控制面是顶层 `x_search_filter`：
+
+```json
+{
+  "x_search_filter": {
+    "allowed_x_handles": ["xai"],
+    "from_date": "2026-08-01",
+    "enable_image_understanding": true
+  }
+}
+```
+
+因此 `--source` 在 OpenRouter 上只是提示。`--source x` 与 `--source web` 都会写入 `diagnostics.warnings` 说明未被强制执行；engine 非 `auto`/`native` 时 native 检索被替换，`x_search` 及其过滤器不会运行，也会告警。
+
 ## 配置与命令行的优先级
 
-优先级从高到低：命令行参数 > 环境变量 > 配置文件 > 兜底默认。
+优先级从高到低：`--source` 等命令行参数 > 环境变量 > 配置文件 > 兜底默认。
 
-需要注意 **配置文件由使用者书写，命令行参数由调用本工具的 agent 书写**，两者作者不同。因此标量配置是**默认值**语义、命令行可以覆盖（实际生效值始终记录在 `diagnostics.options`，可事后审计），但配置中的**限制**不会被命令行静默抹掉。
+需要注意 **配置文件由使用者书写，命令行参数由调用本工具的 agent 书写**，两者作者不同。因此：
 
-allow-list 与 deny-list 都是限制：deny-list 去掉列举的值，allow-list 去掉没列举的一切。命令行只能收紧，不能放宽。
+- `searchSource` 等标量配置是**默认值**语义，命令行可以覆盖（包括把 `x` / `both` 覆盖回 `web`）。实际生效值始终记录在 `diagnostics.options`，可事后审计。
+- 但配置中的**限制**不会被命令行静默抹掉。allow-list 与 deny-list 都是限制：deny-list 去掉列举的值，allow-list 去掉没列举的一切。命令行只能收紧，不能放宽。
 
 | 配置 | 命令行 | 结果 |
 | --- | --- | --- |
 | deny-list | allow-list | 允许（deny 自动满足）；若显式请求了已排除的值，报 `RESPONSES_FILTER_FORBIDDEN` |
-| deny-list | deny-list | 合并去重；超过上限（domain 5）报 `RESPONSES_FILTER_LIMIT` |
+| deny-list | deny-list | 合并去重；超过上限（domain 5 / handle 20）报 `RESPONSES_FILTER_LIMIT` |
 | allow-list | allow-list | 必须是配置清单的子集，否则报 `RESPONSES_FILTER_FORBIDDEN` |
 | allow-list | deny-list | 从配置清单里减掉；减空报 `RESPONSES_FILTER_EMPTY`（空 allow-list 对 API 等于「不限制」，与配置意图相反） |
 
 比较一律不区分大小写。
 
-本工具没有「命令行完全不可覆盖」的硬策略层。若确有此需求，请提 issue 说明场景。
+本工具目前没有"命令行完全不可覆盖"的硬策略层。若确有此需求，请提 issue 说明场景。
 
 ## Responses sources
 
@@ -120,6 +168,24 @@ allow-list 与 deny-list 都是限制：deny-list 去掉列举的值，allow-lis
 ```
 
 同一 URL 同时是 `citation` 和 `searched` 时，citation 优先。
+
+X citation 只带裸 URL，且 `title` 就是 inline citation 序号（`"1"`、`"2"`）。解析器从 URL 还原署名，并丢掉这个无意义的序号标题：
+
+```json
+{
+  "provider": "grok-responses",
+  "source_type": "citation",
+  "tool": "x_search",
+  "url": "https://x.com/xai/status/2087942296721559607",
+  "title": "@xai",
+  "x_handle": "xai",
+  "x_post_id": "2087942296721559607"
+}
+```
+
+只有 `/<handle>/status/<id>` 这种形式带署名；`https://x.com/i/status/...`、`https://x.com/i/web/status/...` 只填 `x_post_id`，并且不保留序号标题。
+
+citation 本身不带产出工具信息，所以 `tool` 是推断的：**挂了 `x_search` 时**（`--source x` / `both`，以及 OpenRouter——那里 `x_search` 必然随行）X 链接标为 `x_search`；`--source web` 下不标，因为 web search 本来就会索引 x.com 页面，标成 `x_search` 等于报告一次没发生的检索。URL 还原出的 `x_handle` / `x_post_id` 与挂了哪个工具无关，始终保留。
 
 ## Tavily 与 Firecrawl
 
@@ -149,9 +215,12 @@ Firecrawl Search（Keyless/key）┘
 
 - `grok_endpoint: responses`
 - `responses_max_turns`
+- `search_source`（`web` / `x` / `both`）
 - `responses_web_search_calls`
 - `responses_x_search_calls`
 - `responses_tool_calls`
+
+工具调用次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的**逐工具较大值**。两边都不可单独信任：部分中转会计费 `x_search` 却不吐 `x_search_call` item（只看 `output[]` 会报 0），另一些会把该字段填成全 0（只看 usage 同样报 0）。`responses_tool_calls.total` 用同一口径，因此可能大于 `raw_path` 里记录的 tool call 明细条数。
 - `extra_allocation`
 - `firecrawl_auth_mode`
 - `degraded` / `grok_error`

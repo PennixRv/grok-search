@@ -94,15 +94,16 @@ Common configuration rules:
 
 - `apiUrl` is the API base URL that supports `/responses`. The script requests `{apiUrl}/responses`, so do not include `/responses` itself.
 - `apiProvider` accepts exactly one value:
-  - `xai`: the official xAI endpoint, using `web_search` with optional `x_search`.
+  - `xai`: the official xAI endpoint, using `web_search` and `x_search` according to `searchSource`.
   - `openrouter`: the OpenRouter endpoint, using `openrouter:web_search`; `responsesOpenRouterEngine` selects its search engine.
   - `openai-compatible`: a relay, proxy, or compatible service that supports xAI-style Responses and the `web_search` tool. A Chat-Completions-only endpoint is not sufficient.
 - When `apiProvider` is omitted, it is inferred from the URL: URLs containing `openrouter` use `openrouter`, URLs containing `api.x.ai` use `xai`, and all others use `openai-compatible`. Set it explicitly for relay services to avoid selecting the wrong request format.
 - `model` must be an ID supported by that endpoint. `responsesMaxTurns` is an integer of at least 1. Common `responsesReasoningEffort` values are `low`, `medium`, and `high`, but support depends on the selected model and provider.
-- `responsesAllowedDomains`, `responsesExcludedDomains`, `responsesAllowedXHandles`, and `responsesExcludedXHandles` are arrays and may contain multiple values, for example `["github.com", "docs.python.org"]`. The allowed and excluded forms of the same filter are mutually exclusive. In environment variables, separate multiple values with commas.
+- `responsesAllowedDomains`, `responsesExcludedDomains`, `responsesAllowedXHandles`, and `responsesExcludedXHandles` are arrays and may contain multiple values, for example `["github.com", "docs.python.org"]`. The allowed and excluded forms of the same filter are mutually exclusive. Domains are capped at 5, X handles at 20. In environment variables, separate multiple values with commas.
+- `searchSource` accepts `web`, `x`, or `both` and selects which search tools are attached by default; the `--source` flag takes precedence. X date windows vary per query and are only available as `--x-from-date` / `--x-to-date`, with no config counterpart.
+- Precedence is CLI > environment > config file > built-in default. Note that you write the config file while the agent invoking this tool writes the CLI args: scalar settings such as `searchSource` are **defaults** the agent may override, and the value actually used is always recorded in `diagnostics.options`. Configured **restrictions**, however, are never silently discarded — allow-lists and deny-lists are both restrictions, and CLI values may only narrow them. Stepping outside one raises `RESPONSES_FILTER_FORBIDDEN`, emptying an allow-list raises `RESPONSES_FILTER_EMPTY`, and two deny-lists are merged rather than replaced. See [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级).
 - `responsesOpenRouterEngine` accepts `auto`, `native`, `exa`, `firecrawl`, `parallel`, or `perplexity`, and only applies when `apiProvider` is `openrouter`.
 - `tavilyApiKey` is optional. `firecrawlApiKey` may also be empty to use Firecrawl Keyless. An empty `outputDir` uses `~/.cache/grok-search/outputs/`.
-- Precedence is CLI > environment > config file > built-in default. Note that you write the config file while the agent invoking this tool writes the CLI args: scalar settings are **defaults** the agent may override, and the value actually used is always recorded in `diagnostics.options`. Configured **restrictions**, however, are never silently discarded — allow-lists and deny-lists are both restrictions, and CLI values may only narrow them. Stepping outside one raises `RESPONSES_FILTER_FORBIDDEN`, emptying an allow-list raises `RESPONSES_FILTER_EMPTY`, and two deny-lists are merged rather than replaced. See [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级).
 
 For OpenRouter, replace the core fields with:
 
@@ -162,9 +163,12 @@ Supported variables:
 | `GROK_RESPONSES_REASONING_EFFORT` | `responsesReasoningEffort` | No | Responses | Default: `low`. |
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | No | Responses | Comma-separated domain allow-list, max 5; mutually exclusive with excluded domains. |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | No | Responses | Comma-separated domain deny-list, max 5; mutually exclusive with allowed domains. |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | No | Responses | Enables direct xAI `x_search`. Default: `false`. |
-| `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | No | Responses | X handle allow-list; mutually exclusive with excluded handles. |
-| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | No | Responses | X handle deny-list; mutually exclusive with allowed handles. |
+| `GROK_SEARCH_SOURCE` | `searchSource` | No | Responses | Default search source: `web`, `x`, or `both`. Default: `web`. |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | No | Responses | Legacy boolean, equivalent to `searchSource: both` and outranked by `--source` and `GROK_SEARCH_SOURCE`. Prefer `searchSource`. |
+| `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | No | Responses | X handle allow-list, max 20; mutually exclusive with excluded handles. |
+| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | No | Responses | X handle deny-list, max 20; mutually exclusive with allowed handles. |
+| `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | No | Responses | Analyze images inside X posts; billed as extra tokens. Default: `false`. |
+| `GROK_X_VIDEO_UNDERSTANDING` | `xVideoUnderstanding` | No | Responses | Analyze videos inside X posts; billed as extra tokens. Default: `false`. |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | No | OpenRouter Responses | `auto`, `native`, `exa`, `firecrawl`, `parallel`, or `perplexity`. Default: `auto`. |
 | `GROK_DEFAULT_EXTRA` | `defaultExtra` | No | `search.js` | Combined Tavily/Firecrawl source target. Default: `6`. |
 | `GROK_SOURCE_CHARS` | `sourceChars` | No | `search.js` | Per-source stdout snippet limit. Default: `400`; `0` omits snippets. |
@@ -213,8 +217,42 @@ On success, provider attempts, warnings, timestamps, and command options live un
 ./scripts/search.js --deadline 120 "query"
 ./scripts/search.js --full-sources "debug provider raw"
 ./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
 ```
+
+### Search sources
+
+`--source` selects which Grok server-side tools are attached. The default is `web`:
+
+```bash
+./scripts/search.js --source x "what is X saying about grok-4.6"   # X only
+./scripts/search.js --source both "reaction to the grok-4.6 release" # Grok routes
+./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
+./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./scripts/search.js --source x --x-images "query"                  # analyze post images
+```
+
+- `x_search` supports handle allow/deny lists (mutually exclusive, max 20 each), `--x-from-date` / `--x-to-date` (`YYYY-MM-DD`), and `--x-images` / `--x-videos` (off by default, billed as extra tokens; `--no-x-images` / `--no-x-videos` turn off what the config enabled).
+- A **command-line** X filter promotes an unspecified `--source` to `both`; combining one with an explicit `--source web` raises `SEARCH_SOURCE_CONFLICT`. X filters in the config file only apply once X search is on — they never switch it on by themselves.
+- `--responses-x-search` remains an alias for `--source both`.
+- X search is billed at $5 per 1k calls, the same rate as web search. See `diagnostics.responses_x_search_calls` for the actual count.
+- Tavily and Firecrawl extras only search the web, never X. Pair `--source x` with `--no-extra` for X-only evidence.
+- OpenRouter attaches `x_search` to native web search automatically, so `--source` is only a hint there; whatever is not enforced is reported in `diagnostics.warnings`.
+
+X citations arrive as bare URLs whose `title` is only the inline citation marker, so source cards recover attribution from the URL:
+
+```json
+{
+  "provider": "grok-responses",
+  "source_type": "citation",
+  "tool": "x_search",
+  "url": "https://x.com/xai/status/2087942296721559607",
+  "title": "@xai",
+  "x_handle": "xai",
+  "x_post_id": "2087942296721559607"
+}
+```
+
+Post text and dates are not in the card; `answer.text` attributes each X claim by handle and date.
 
 `search.js` is Responses-only. It calls `{GROK_API_URL}/responses` with `stream:false`, enables the provider-native web search tool, and returns:
 

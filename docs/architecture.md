@@ -31,7 +31,7 @@ scripts/map.js
 ```text
 query
   ├─ Grok Responses
-  │    └─ provider-native web_search / x_search
+  │    └─ provider-native web_search / x_search（由 --source 决定挂载哪些）
   ├─ Tavily Search（配置 key 时）
   └─ Firecrawl Search（Keyless 或 API key）
        ↓ 三路并行
@@ -43,7 +43,7 @@ query
        └─ diagnostics
 ```
 
-Tavily 与 Firecrawl 永远是独立证据通道，不进入 Grok input。`--extra N` 是两家合计的目标数；默认 6，两家可用时均分，奇数优先 Tavily。
+Tavily 与 Firecrawl 永远是独立证据通道，不进入 Grok input。`--extra N` 是两家合计的目标数；默认 6，两家可用时均分，奇数优先 Tavily。两家都只搜网页，`--source x` 不会改变它们的行为——想要纯 X 证据需配合 `--no-extra`。
 
 ### Grok 额度降级
 
@@ -85,7 +85,8 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 - `options`
 - `searched_at` / `fetched_at` / `mapped_at`
 - `usage`、`cost_in_usd_ticks`、`cost_usd`
-- `responses_web_search_calls`、`responses_x_search_calls`、`responses_tool_calls`
+- `search_source`（`web` / `x` / `both`）
+- `responses_web_search_calls`、`responses_x_search_calls`、`responses_tool_calls`——次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的逐工具较大值；两侧都有中转会漏报，任一单独取值都会报成 0
 - `degraded` 与 `grok_error`（仅额度降级）
 - `firecrawl_auth_mode: keyless | api_key`
 
@@ -93,8 +94,8 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 
 ## Provider 边界
 
-- xAI 与 openai-compatible 使用 `web_search` / `x_search` Responses tools。
-- OpenRouter 使用 `openrouter:web_search`，不追加 `:online`。
+- xAI 与 openai-compatible 使用 `web_search` / `x_search` Responses tools，可按 `--source` 单独挂载。
+- OpenRouter 使用 `openrouter:web_search`，不追加 `:online`；`x_search` 由 OpenRouter 自动附加在 native 检索上，只能通过顶层 `x_search_filter` 过滤，因此 `--source` 在该路径下不被强制执行并会告警。
 - Tavily/Firecrawl 与 Grok 之间不传递证据正文。
 - Fetch、Map 是内容获取/发现工具，不生成回答。
 - Firecrawl Keyless 受按 IP 的月度与每日限制；配置 key 后使用账户额度和更高限流。

@@ -27,6 +27,8 @@ async function runNode(args, env = {}) {
         GROK_MAX_SOURCES: "",
         GROK_DEADLINE_SECONDS: "",
         GROK_RESPONSES_MAX_TURNS: "",
+        GROK_SEARCH_SOURCE: "",
+        GROK_RESPONSES_INCLUDE_X_SEARCH: "",
         GROK_SEARCH_MODE: "",
         GROK_RESPONSES_FALLBACK_CHAT: "",
         ...env,
@@ -230,6 +232,7 @@ await withServer(
     });
   },
   async (_server, port) => {
+    // --responses-x-search is the legacy alias for --source both.
     const searchResult = await runNode(
       [
         "scripts/search.js",
@@ -248,21 +251,161 @@ await withServer(
       baseGrokEnv(port)
     );
     assert.equal(searchResult.code, 0);
-    assert.equal(parseJson(searchResult.stdout).answer.text, "Filtered answer.");
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.answer.text, "Filtered answer.");
+    assert.equal(output.diagnostics.options.search_source, "both");
   }
 );
 
+function xPayload() {
+  return {
+    output: [
+      {
+        type: "message",
+        content: [
+          {
+            type: "output_text",
+            text: "X answer.",
+            annotations: [{ url: "https://x.com/xai/status/2087942296721559607", title: "1" }],
+          },
+        ],
+      },
+    ],
+    // No x_search_call items: the relay reports its billed calls only through usage.
+    usage: { input_tokens: 10, output_tokens: 5, server_side_tool_usage_details: { web_search_calls: 0, x_search_calls: 8 } },
+  };
+}
+
+await withServer(
+  (req, res) => {
+    readJson(req, (body) => {
+      assert.deepEqual(body.tools, [
+        {
+          type: "x_search",
+          allowed_x_handles: ["xai"],
+          from_date: "2026-08-01",
+          to_date: "2026-08-16",
+          enable_image_understanding: true,
+        },
+      ]);
+      assert.equal(body.input.length, 3);
+      assert.match(body.input[1].content, /X \(Twitter\) evidence/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(xPayload()));
+    });
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      [
+        "scripts/search.js",
+        "--no-extra",
+        "--source",
+        "x",
+        "--responses-allowed-x-handles",
+        "xai",
+        "--x-from-date",
+        "2026-08-01",
+        "--x-to-date",
+        "2026-08-16",
+        "--x-images",
+        "mock query",
+      ],
+      baseGrokEnv(port)
+    );
+    assert.equal(searchResult.code, 0);
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.diagnostics.options.search_source, "x");
+    assert.equal(output.diagnostics.options.x_from_date, "2026-08-01");
+    assert.equal(output.diagnostics.options.x_image_understanding, true);
+    assert.equal(Object.hasOwn(output.diagnostics.options, "x_video_understanding"), false);
+    // Billed x_search calls are reported even though output[] carried no call items.
+    assert.equal(output.diagnostics.responses_x_search_calls, 8);
+    assert.deepEqual(output.diagnostics.responses_tool_calls, { total: 8 });
+    assert.deepEqual(output.sources.items, [
+      {
+        provider: "grok-responses",
+        url: "https://x.com/xai/status/2087942296721559607",
+        title: "@xai",
+        source_type: "citation",
+        tool: "x_search",
+        x_handle: "xai",
+        x_post_id: "2087942296721559607",
+      },
+    ]);
+    assert.equal(output.sources.raw_path, null);
+  }
+);
+
+// X filter options imply X search when the source was not explicitly set.
+await withServer(
+  (req, res) => {
+    readJson(req, (body) => {
+      assert.deepEqual(body.tools, [{ type: "web_search" }, { type: "x_search", from_date: "2026-08-01" }]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(xPayload()));
+    });
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      ["scripts/search.js", "--no-extra", "--x-from-date", "2026-08-01", "mock query"],
+      baseGrokEnv(port)
+    );
+    assert.equal(searchResult.code, 0);
+    assert.equal(parseJson(searchResult.stdout).diagnostics.options.search_source, "both");
+  }
+);
+
+// GROK_SEARCH_SOURCE sets the default without a flag.
+await withServer(
+  (req, res) => {
+    readJson(req, (body) => {
+      assert.deepEqual(body.tools, [{ type: "web_search" }, { type: "x_search" }]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(xPayload()));
+    });
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      ["scripts/search.js", "--no-extra", "mock query"],
+      baseGrokEnv(port, { GROK_SEARCH_SOURCE: "both" })
+    );
+    assert.equal(searchResult.code, 0);
+    assert.equal(parseJson(searchResult.stdout).diagnostics.options.search_source, "both");
+  }
+);
+
+// Bad arguments fail at the argument stage (exit 2) before any config or output work.
+for (const [args, code, exitCode] of [
+  [["--source", "twitter", "mock query"], "SEARCH_SOURCE_INVALID", 2],
+  [["--source=", "mock query"], "ARGUMENT_ERROR", 2],
+  [["--x-from-date", "08/01/2026", "mock query"], "ARGUMENT_ERROR", 2],
+  // Date.parse rolls this over to Mar 2 rather than rejecting it.
+  [["--x-from-date", "2026-02-30", "mock query"], "ARGUMENT_ERROR", 2],
+  [["--x-from-date", "2026-08-16", "--x-to-date", "2026-08-01", "mock query"], "ARGUMENT_ERROR", 2],
+  [["--source", "web", "--x-from-date", "2026-08-01", "mock query"], "SEARCH_SOURCE_CONFLICT", 1],
+  [
+    ["--responses-allowed-x-handles", Array.from({ length: 21 }, (_item, index) => `handle${index}`).join(","), "mock query"],
+    "RESPONSES_FILTER_LIMIT",
+    1,
+  ],
+  [["--responses-allowed-x-handles", "a", "--responses-excluded-x-handles", "b", "mock query"], "RESPONSES_FILTER_CONFLICT", 1],
+]) {
+  result = await runNode(["scripts/search.js", ...args], baseGrokEnv(1));
+  assert.equal(result.code, exitCode);
+  assert.equal(parseJson(result.stdout).error.code, code);
+}
+
 // Config is written by the user and CLI args by the agent, so a CLI filter must never
-// silently discard a configured restriction.
+// silently discard a configured exclusion.
 {
-  const denyHome = await mkdtemp(path.join(tmpdir(), "grok-search-deny-"));
-  await mkdir(path.join(denyHome, ".config", "grok-search"), { recursive: true });
+  const filterHome = await mkdtemp(path.join(tmpdir(), "grok-search-filters-"));
+  await mkdir(path.join(filterHome, ".config", "grok-search"), { recursive: true });
   await writeFile(
-    path.join(denyHome, ".config", "grok-search", "config.json"),
-    JSON.stringify({ responsesExcludedDomains: ["reddit.com", "quora.com"] }),
+    path.join(filterHome, ".config", "grok-search", "config.json"),
+    JSON.stringify({ responsesExcludedDomains: ["reddit.com", "quora.com"], responsesExcludedXHandles: ["spam_account"] }),
     "utf8"
   );
-  const denyEnv = (port) => ({ ...baseGrokEnv(port), HOME: denyHome, USERPROFILE: denyHome });
+  const filterEnv = (port) => ({ ...baseGrokEnv(port), HOME: filterHome, USERPROFILE: filterHome });
 
   await withServer(
     (req, res) => {
@@ -274,7 +417,7 @@ await withServer(
     async (_server, port) => {
       // An allow-list is stronger than a deny-list, so a non-conflicting one is honored.
       let output = parseJson(
-        (await runNode(["scripts/search.js", "--no-extra", "--responses-allowed-domains", "github.com", "q"], denyEnv(port)))
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-allowed-domains", "github.com", "q"], filterEnv(port)))
           .stdout
       );
       assert.deepEqual(output.diagnostics.options.responses_allowed_domains, ["github.com"]);
@@ -282,14 +425,14 @@ await withServer(
 
       // Two deny-lists compose instead of the CLI replacing the configured one.
       output = parseJson(
-        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "medium.com", "q"], denyEnv(port)))
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "medium.com", "q"], filterEnv(port)))
           .stdout
       );
       assert.deepEqual(output.diagnostics.options.responses_excluded_domains, ["reddit.com", "quora.com", "medium.com"]);
 
       // Merging is case-insensitive and does not duplicate.
       output = parseJson(
-        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "REDDIT.com", "q"], denyEnv(port)))
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "REDDIT.com", "q"], filterEnv(port)))
           .stdout
       );
       assert.deepEqual(output.diagnostics.options.responses_excluded_domains, ["reddit.com", "quora.com"]);
@@ -300,8 +443,9 @@ await withServer(
   for (const [args, expected] of [
     [["--responses-allowed-domains", "reddit.com"], "reddit.com"],
     [["--responses-allowed-domains", "github.com,QUORA.com"], "QUORA.com"],
+    [["--source", "x", "--responses-allowed-x-handles", "spam_account"], "spam_account"],
   ]) {
-    result = await runNode(["scripts/search.js", "--no-extra", ...args, "q"], denyEnv(1));
+    result = await runNode(["scripts/search.js", "--no-extra", ...args, "q"], filterEnv(1));
     assert.notEqual(result.code, 0);
     const output = parseJson(result.stdout);
     assert.equal(output.error.code, "RESPONSES_FILTER_FORBIDDEN");
@@ -310,17 +454,17 @@ await withServer(
 
   // A merged deny-list that overflows the provider cap must fail loudly, not silently drop.
   await writeFile(
-    path.join(denyHome, ".config", "grok-search", "config.json"),
+    path.join(filterHome, ".config", "grok-search", "config.json"),
     JSON.stringify({ responsesExcludedDomains: ["a.com", "b.com", "c.com", "d.com", "e.com"] }),
     "utf8"
   );
-  result = await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "f.com", "q"], denyEnv(1));
+  result = await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "f.com", "q"], filterEnv(1));
   assert.notEqual(result.code, 0);
   assert.equal(parseJson(result.stdout).error.code, "RESPONSES_FILTER_LIMIT");
 }
 
-// A configured allow-list is the strongest restriction of all: CLI filters narrow it,
-// never widen it back to the open web.
+// A configured allow-list is the strongest exclusion of all: CLI filters narrow it, never
+// widen it back to the open web.
 {
   const allowHome = await mkdtemp(path.join(tmpdir(), "grok-search-allow-"));
   await mkdir(path.join(allowHome, ".config", "grok-search"), { recursive: true });
@@ -368,6 +512,141 @@ await withServer(
   assert.notEqual(result.code, 0);
   assert.equal(parseJson(result.stdout).error.code, "RESPONSES_FILTER_EMPTY");
 }
+
+// Configured X handle filters are preferences for when X search runs, not a request to
+// turn on a billed extra search channel.
+{
+  const handleHome = await mkdtemp(path.join(tmpdir(), "grok-search-x-config-"));
+  await mkdir(path.join(handleHome, ".config", "grok-search"), { recursive: true });
+  await writeFile(
+    path.join(handleHome, ".config", "grok-search", "config.json"),
+    JSON.stringify({ searchSource: "web", responsesExcludedXHandles: ["spam_account"], xImageUnderstanding: true }),
+    "utf8"
+  );
+  const handleEnv = (port) => ({ ...baseGrokEnv(port), HOME: handleHome, USERPROFILE: handleHome });
+
+  await withServer(
+    (req, res) => {
+      readJson(req, (body) => {
+        assert.deepEqual(body.tools, [{ type: "web_search" }]);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(responsesPayload()));
+      });
+    },
+    async (_server, port) => {
+      const output = parseJson((await runNode(["scripts/search.js", "--no-extra", "q"], handleEnv(port))).stdout);
+      assert.equal(output.diagnostics.options.search_source, "web");
+      assert.equal(Object.hasOwn(output.diagnostics.options, "responses_excluded_x_handles"), false);
+    }
+  );
+
+  // Asking for X search does apply them, and --no-x-images can still turn the config off.
+  await withServer(
+    (req, res) => {
+      readJson(req, (body) => {
+        assert.deepEqual(body.tools, [
+          { type: "web_search" },
+          { type: "x_search", excluded_x_handles: ["spam_account"] },
+        ]);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(xPayload()));
+      });
+    },
+    async (_server, port) => {
+      const output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--source", "both", "--no-x-images", "q"], handleEnv(port))).stdout
+      );
+      assert.equal(output.diagnostics.options.search_source, "both");
+      assert.deepEqual(output.diagnostics.options.responses_excluded_x_handles, ["spam_account"]);
+      assert.equal(Object.hasOwn(output.diagnostics.options, "x_image_understanding"), false);
+    }
+  );
+}
+
+// The default OpenRouter path must stay warning-free; the non-enforcement note is only
+// worth its stdout when web-only was actually asked for.
+await withServer(
+  (req, res) => {
+    readJson(req, () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(responsesPayload("OpenRouter answer.")));
+    });
+  },
+  async (_server, port) => {
+    const openRouterEnv = baseGrokEnv(port, { GROK_API_PROVIDER: "openrouter", GROK_MODEL: "x-ai/grok-4.1-fast" });
+    let output = parseJson((await runNode(["scripts/search.js", "--no-extra", "q"], openRouterEnv)).stdout);
+    assert.deepEqual(output.diagnostics.warnings, []);
+
+    output = parseJson((await runNode(["scripts/search.js", "--no-extra", "--source", "web", "q"], openRouterEnv)).stdout);
+    assert.match(output.diagnostics.warnings[0], /--source web is not enforced/);
+  }
+);
+
+// The legacy boolean keeps working as an alias for the "both" mode.
+{
+  const legacyHome = await mkdtemp(path.join(tmpdir(), "grok-search-legacy-x-"));
+  await mkdir(path.join(legacyHome, ".config", "grok-search"), { recursive: true });
+  const writeLegacyConfig = (value) =>
+    writeFile(
+      path.join(legacyHome, ".config", "grok-search", "config.json"),
+      JSON.stringify({ responsesIncludeXSearch: value }),
+      "utf8"
+    );
+  const legacyEnv = (port) => ({ ...baseGrokEnv(port), HOME: legacyHome, USERPROFILE: legacyHome });
+
+  await withServer(
+    (req, res) => {
+      readJson(req, (body) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body.tools.length === 2 ? xPayload() : responsesPayload()));
+      });
+    },
+    async (_server, port) => {
+      await writeLegacyConfig(true);
+      let output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], legacyEnv(port))).stdout);
+      assert.equal(output.diagnostics.options.search_source, "both");
+
+      // An explicit --source decides instead.
+      output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--source", "both", "mock query"], legacyEnv(port))).stdout
+      );
+      assert.equal(output.diagnostics.options.search_source, "both");
+
+      // GROK_SEARCH_SOURCE also outranks the boolean.
+      output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "mock query"], { ...legacyEnv(port), GROK_SEARCH_SOURCE: "x" })).stdout
+      );
+      assert.equal(output.diagnostics.options.search_source, "x");
+
+      // false is indistinguishable from absent.
+      await writeLegacyConfig(false);
+      output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], legacyEnv(port))).stdout);
+      assert.equal(output.diagnostics.options.search_source, "web");
+    }
+  );
+}
+
+// OpenRouter cannot enforce an X-only source; it must say so instead of implying it did.
+await withServer(
+  (req, res) => {
+    readJson(req, (body) => {
+      assert.equal(body.tools[0].type, "openrouter:web_search");
+      assert.deepEqual(body.x_search_filter, {});
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(responsesPayload("OpenRouter X answer.")));
+    });
+  },
+  async (_server, port) => {
+    const searchResult = await runNode(
+      ["scripts/search.js", "--no-extra", "--source", "x", "mock query"],
+      baseGrokEnv(port, { GROK_API_PROVIDER: "openrouter", GROK_MODEL: "x-ai/grok-4.1-fast" })
+    );
+    assert.equal(searchResult.code, 0);
+    const output = parseJson(searchResult.stdout);
+    assert.equal(output.diagnostics.options.search_source, "x");
+    assert.match(output.diagnostics.warnings[0], /OpenRouter cannot run x_search alone/);
+  }
+);
 
 await withServer(
   (req, res) => {

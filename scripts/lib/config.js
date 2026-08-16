@@ -22,8 +22,11 @@ const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
 const DEFAULT_RESPONSES_MAX_TURNS = 3;
 const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
 const DEFAULT_RESPONSES_OPENROUTER_ENGINE = "auto";
+const DEFAULT_SEARCH_SOURCE = "web";
 const API_PROVIDERS = new Set(["xai", "openrouter", "openai-compatible"]);
 const OPENROUTER_SEARCH_ENGINES = new Set(["auto", "native", "exa", "firecrawl", "parallel", "perplexity"]);
+const SEARCH_SOURCES = new Set(["web", "x", "both"]);
+export const X_HANDLE_LIMIT = 20;
 
 function env(name) {
   const value = process.env[name];
@@ -148,6 +151,20 @@ export function normalizeApiProvider(value, grokApiUrl) {
   throw new ConfigError(`GROK_API_PROVIDER 必须是: ${[...API_PROVIDERS].join(", ")}`, "GROK_API_PROVIDER_INVALID");
 }
 
+export function normalizeSearchSource(value) {
+  const source = String(value || DEFAULT_SEARCH_SOURCE).trim().toLowerCase();
+  if (SEARCH_SOURCES.has(source)) return source;
+  throw new ConfigError(`search source 必须是: ${[...SEARCH_SOURCES].join(", ")}`, "SEARCH_SOURCE_INVALID");
+}
+
+export function usesXSearch(searchSource) {
+  return searchSource === "x" || searchSource === "both";
+}
+
+export function usesWebSearch(searchSource) {
+  return searchSource === "web" || searchSource === "both";
+}
+
 export function normalizeOpenRouterSearchEngine(value) {
   const engine = String(value || DEFAULT_RESPONSES_OPENROUTER_ENGINE).trim().toLowerCase();
   if (OPENROUTER_SEARCH_ENGINES.has(engine)) return engine;
@@ -215,6 +232,13 @@ export async function loadConfig({ requireGrok = false } = {}) {
       "responsesExcludedDomains",
       "responses_excluded_domains",
     ]),
+    responsesSearchSource: envOrFile(
+      "GROK_SEARCH_SOURCE",
+      fileConfig,
+      ["GROK_SEARCH_SOURCE", "searchSource", "search_source"],
+      ""
+    ),
+    // Legacy boolean kept as a fallback; it now means searchSource "both".
     responsesIncludeXSearch: envOrFileBool("GROK_RESPONSES_INCLUDE_X_SEARCH", fileConfig, [
       "GROK_RESPONSES_INCLUDE_X_SEARCH",
       "responsesIncludeXSearch",
@@ -230,6 +254,16 @@ export async function loadConfig({ requireGrok = false } = {}) {
       "responsesExcludedXHandles",
       "responses_excluded_x_handles",
     ]),
+    responsesXImageUnderstanding: envOrFileBool("GROK_X_IMAGE_UNDERSTANDING", fileConfig, [
+      "GROK_X_IMAGE_UNDERSTANDING",
+      "xImageUnderstanding",
+      "x_image_understanding",
+    ], false),
+    responsesXVideoUnderstanding: envOrFileBool("GROK_X_VIDEO_UNDERSTANDING", fileConfig, [
+      "GROK_X_VIDEO_UNDERSTANDING",
+      "xVideoUnderstanding",
+      "x_video_understanding",
+    ], false),
     responsesOpenRouterEngine: envOrFile(
       "GROK_RESPONSES_OPENROUTER_ENGINE",
       fileConfig,

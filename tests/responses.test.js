@@ -10,9 +10,13 @@ const baseOptions = {
   reasoningEffort: "low",
   allowedDomains: [],
   excludedDomains: [],
-  includeXSearch: false,
+  searchSource: "web",
   allowedXHandles: [],
   excludedXHandles: [],
+  xFromDate: "",
+  xToDate: "",
+  xImageUnderstanding: false,
+  xVideoUnderstanding: false,
   openRouterEngine: "auto",
 };
 
@@ -26,7 +30,7 @@ const directBody = buildResponsesBody(
     maxTurns: 2,
     reasoningEffort: "medium",
     allowedDomains: ["docs.x.ai", "openai.com"],
-    includeXSearch: true,
+    searchSource: "both",
     allowedXHandles: ["xai", "OpenAI"],
   },
   { apiProvider: "xai" }
@@ -38,6 +42,41 @@ assert.equal(directBody.stream, false);
 assert.deepEqual(directBody.tools, [
   { type: "web_search", filters: { allowed_domains: ["docs.x.ai", "openai.com"] } },
   { type: "x_search", allowed_x_handles: ["xai", "OpenAI"] },
+]);
+// The base prompt stays the first system message so it remains a cache prefix.
+assert.equal(directBody.input.length, 3);
+assert.equal(directBody.input[0].role, "system");
+assert.equal(directBody.input[1].role, "system");
+assert.match(directBody.input[1].content, /X \(Twitter\) evidence/);
+assert.equal(directBody.input[2].role, "user");
+
+const webOnlyBody = buildResponsesBody("latest docs", baseOptions, { apiProvider: "xai" });
+assert.deepEqual(webOnlyBody.tools, [{ type: "web_search" }]);
+assert.equal(webOnlyBody.input.length, 2);
+assert.equal(webOnlyBody.input.every((message) => !/X \(Twitter\) evidence/.test(message.content)), true);
+
+const xOnlyBody = buildResponsesBody(
+  "what is X saying",
+  {
+    ...baseOptions,
+    searchSource: "x",
+    excludedXHandles: ["spam_account"],
+    xFromDate: "2026-08-01",
+    xToDate: "2026-08-16",
+    xImageUnderstanding: true,
+    xVideoUnderstanding: true,
+  },
+  { apiProvider: "xai" }
+);
+assert.deepEqual(xOnlyBody.tools, [
+  {
+    type: "x_search",
+    excluded_x_handles: ["spam_account"],
+    from_date: "2026-08-01",
+    to_date: "2026-08-16",
+    enable_image_understanding: true,
+    enable_video_understanding: true,
+  },
 ]);
 
 const nonReasoningBody = buildResponsesBody(
@@ -67,8 +106,9 @@ const openRouterBody = buildResponsesBody(
     ...baseOptions,
     model: "x-ai/grok-4.1-fast",
     excludedDomains: ["reddit.com"],
-    includeXSearch: true,
+    searchSource: "both",
     excludedXHandles: ["noisy_account"],
+    xFromDate: "2026-01-01",
     openRouterEngine: "exa",
   },
   { apiProvider: "openrouter" }
@@ -87,7 +127,10 @@ assert.deepEqual(openRouterBody.tools, [
     },
   },
 ]);
-assert.deepEqual(openRouterBody.x_search_filter, { excluded_x_handles: ["noisy_account"] });
+assert.deepEqual(openRouterBody.x_search_filter, {
+  excluded_x_handles: ["noisy_account"],
+  from_date: "2026-01-01",
+});
 
 const parsed = parseGrokResponses({
   output: [
@@ -175,7 +218,7 @@ assert.deepEqual(
 );
 assert.equal(openRouterParsed.diagnostics.cost_usd, 0.25);
 
-const xParsed = parseGrokResponses({
+const xPayload = {
   output: [
     {
       type: "x_search_call",
@@ -202,12 +245,19 @@ const xParsed = parseGrokResponses({
       ],
     },
   ],
-});
+};
+
+const xParsed = parseGrokResponses(xPayload, { xEnabled: true });
 
 assert.equal(xParsed.sources.length, 1);
 assert.equal(xParsed.sources[0].tool, "x_search");
+// The citation title is only the inline marker; the handle comes from the URL instead.
+assert.equal(xParsed.sources[0].title, "@xai");
+assert.equal(xParsed.sources[0].x_handle, "xai");
+assert.equal(xParsed.sources[0].x_post_id, "123");
 assert.equal(xParsed.diagnostics.responses_web_search_calls, 1);
 assert.equal(xParsed.diagnostics.responses_x_search_calls, 1);
+assert.equal(xParsed.diagnostics.responses_tool_call_total, 2);
 assert.deepEqual(xParsed.diagnostics.responses_tool_calls, [
   {
     tool: "x_search",
@@ -226,6 +276,61 @@ assert.deepEqual(xParsed.diagnostics.responses_tool_calls, [
     source_count: 0,
   },
 ]);
+
+// Under --source web no x_search tool is mounted, so an x.com citation web search found
+// must not be relabeled as an X search that never ran.
+const webOnlyXCitation = parseGrokResponses(xPayload, { xEnabled: false });
+assert.equal(webOnlyXCitation.sources[0].tool, "web_search");
+// The URL-derived attribution is still useful and stays regardless of the mounted tool.
+assert.equal(webOnlyXCitation.sources[0].x_handle, "xai");
+
+// Relays that bill x_search without emitting x_search_call items in output[]: usage wins.
+const usageCountedParsed = parseGrokResponses({
+  output: [
+    {
+      type: "message",
+      content: [
+        {
+          type: "output_text",
+          text: "Answer from X.",
+          annotations: [
+            { type: "url_citation", url: "https://x.com/kunchenguid/status/2087942296721559607", title: "1" },
+            { type: "url_citation", url: "https://x.com/i/status/2087942296721559608", title: "2" },
+          ],
+        },
+      ],
+    },
+  ],
+  usage: {
+    input_tokens: 100,
+    output_tokens: 20,
+    server_side_tool_usage_details: { web_search_calls: 0, x_search_calls: 8 },
+  },
+}, { xEnabled: true });
+
+assert.equal(usageCountedParsed.diagnostics.responses_x_search_calls, 8);
+assert.equal(usageCountedParsed.diagnostics.responses_web_search_calls, 0);
+assert.equal(usageCountedParsed.diagnostics.responses_tool_call_total, 8);
+assert.equal(usageCountedParsed.diagnostics.responses_tool_calls.length, 0);
+assert.equal(usageCountedParsed.sources[0].title, "@kunchenguid");
+assert.equal(usageCountedParsed.sources[0].x_handle, "kunchenguid");
+// x.com/i/status/... carries no handle, so the marker title is dropped rather than kept.
+assert.equal(usageCountedParsed.sources[1].x_post_id, "2087942296721559608");
+assert.equal(Object.hasOwn(usageCountedParsed.sources[1], "x_handle"), false);
+assert.equal(Object.hasOwn(usageCountedParsed.sources[1], "title"), false);
+
+// The mirror relay bug: usage reports the field zeroed out while output[] shows the calls.
+// Neither source alone is trustworthy, so the higher per-tool count wins.
+const zeroedUsageParsed = parseGrokResponses({
+  output: [
+    { type: "web_search_call", status: "completed", action: { type: "search", query: "a" } },
+    { type: "web_search_call", status: "completed", action: { type: "search", query: "b" } },
+    { type: "message", content: [{ type: "output_text", text: "Answer." }] },
+  ],
+  usage: { server_side_tool_usage_details: { web_search_calls: 0, x_search_calls: 0 } },
+});
+assert.equal(zeroedUsageParsed.diagnostics.responses_web_search_calls, 2);
+assert.equal(zeroedUsageParsed.diagnostics.responses_tool_call_total, 2);
 
 const missing = parseGrokResponses({});
 assert.equal(missing.text, "");

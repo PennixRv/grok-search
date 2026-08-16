@@ -94,15 +94,16 @@ chmod 600 ~/.config/grok-search/config.json
 
 - `apiUrl` 填支持 `/responses` 的 API base URL；脚本会请求 `{apiUrl}/responses`，不要把 `/responses` 本身写进去。
 - `apiProvider` 一次只能填写一个值：
-  - `xai`：xAI 官方接口，使用 `web_search`，并可启用 `x_search`。
+  - `xai`：xAI 官方接口，按 `searchSource` 使用 `web_search` 与 `x_search`。
   - `openrouter`：OpenRouter 接口，改用 `openrouter:web_search`；可通过 `responsesOpenRouterEngine` 选择搜索引擎。
   - `openai-compatible`：支持 xAI 风格 Responses 与 `web_search` tool 的中转、反代或兼容服务。仅支持 Chat Completions 的接口不能使用。
 - `apiProvider` 省略时会按 URL 推断：包含 `openrouter` 视为 `openrouter`，包含 `api.x.ai` 视为 `xai`，其他 URL 视为 `openai-compatible`。中转服务建议显式填写，避免请求格式判断错误。
 - `model` 必须填写该 endpoint 实际支持的模型 ID；`responsesMaxTurns` 是不小于 1 的整数。`responsesReasoningEffort` 常见值为 `low`、`medium`、`high`，但是否支持取决于具体模型与 provider。
-- `responsesAllowedDomains`、`responsesExcludedDomains`、`responsesAllowedXHandles`、`responsesExcludedXHandles` 都是数组，可以填写多个值，例如 `["github.com", "docs.python.org"]`；同一组 allowed 与 excluded 不能同时使用。环境变量中的多值使用逗号分隔。
+- `responsesAllowedDomains`、`responsesExcludedDomains`、`responsesAllowedXHandles`、`responsesExcludedXHandles` 都是数组，可以填写多个值，例如 `["github.com", "docs.python.org"]`；同一组 allowed 与 excluded 不能同时使用。domain 上限 5 个，X handle 上限 20 个。环境变量中的多值使用逗号分隔。
+- `searchSource` 可选 `web`、`x` 或 `both`，决定默认挂载哪些检索工具；命令行 `--source` 优先。X 的日期窗口是按查询变化的，只能用 `--x-from-date` / `--x-to-date` 传入，没有对应配置项。
+- 优先级为 命令行 > 环境变量 > 配置文件 > 默认值。注意配置文件由你书写、命令行参数由调用本工具的 agent 书写：标量配置（如 `searchSource`）是**默认值**，agent 可以覆盖，实际生效值见 `diagnostics.options`；但配置里的**限制**不会被静默抹掉——allow-list 与 deny-list 都是限制，命令行只能收紧不能放宽。越界报 `RESPONSES_FILTER_FORBIDDEN`，把 allow-list 减空报 `RESPONSES_FILTER_EMPTY`，两个 deny-list 合并而非替换。规则见 [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级)。
 - `responsesOpenRouterEngine` 可选 `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`，仅在 `apiProvider` 为 `openrouter` 时生效。
 - `tavilyApiKey` 可留空；`firecrawlApiKey` 也可留空并使用 Firecrawl Keyless。`outputDir` 留空时使用默认目录 `~/.cache/grok-search/outputs/`。
-- 优先级为 命令行 > 环境变量 > 配置文件 > 默认值。注意配置文件由你书写、命令行参数由调用本工具的 agent 书写：标量配置是**默认值**，agent 可以覆盖，实际生效值见 `diagnostics.options`；但配置里的**限制**不会被静默抹掉——allow-list 与 deny-list 都是限制，命令行只能收紧不能放宽。越界报 `RESPONSES_FILTER_FORBIDDEN`，把 allow-list 减空报 `RESPONSES_FILTER_EMPTY`，两个 deny-list 合并而非替换。规则见 [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级)。
 
 如果使用 OpenRouter，核心字段可改为：
 
@@ -155,9 +156,12 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_RESPONSES_REASONING_EFFORT` | `responsesReasoningEffort` | 否 | Responses | 默认 `low`。 |
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | 否 | Responses | 逗号分隔 domain allow-list，最多 5 个；与 excluded 互斥。 |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | 否 | Responses | 逗号分隔 domain deny-list，最多 5 个；与 allowed 互斥。 |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | 否 | Responses | 是否启用 direct xAI `x_search`。默认 `false`。 |
-| `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | 否 | Responses | X handle allow-list；与 excluded 互斥。 |
-| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | 否 | Responses | X handle deny-list；与 allowed 互斥。 |
+| `GROK_SEARCH_SOURCE` | `searchSource` | 否 | Responses | 默认检索源：`web`、`x` 或 `both`。默认 `web`。 |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | 否 | Responses | 旧布尔开关，等价 `searchSource: both`；被 `--source` 与 `GROK_SEARCH_SOURCE` 覆盖。建议改用 `searchSource`。 |
+| `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | 否 | Responses | X handle allow-list，最多 20 个；与 excluded 互斥。 |
+| `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | 否 | Responses | X handle deny-list，最多 20 个；与 allowed 互斥。 |
+| `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | 否 | Responses | 分析 X 帖子中的图片，按 token 额外计费。默认 `false`。 |
+| `GROK_X_VIDEO_UNDERSTANDING` | `xVideoUnderstanding` | 否 | Responses | 分析 X 帖子中的视频，按 token 额外计费。默认 `false`。 |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | 否 | OpenRouter Responses | `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`。默认 `auto`。 |
 | `GROK_DEFAULT_EXTRA` | `defaultExtra` | 否 | `search.js` | Tavily 与 Firecrawl 合计的默认 extra source 数量。默认 `6`。 |
 | `GROK_SOURCE_CHARS` | `sourceChars` | 否 | `search.js` | 每条 source stdout snippet 长度。默认 `400`；`0` 表示不输出 snippet。 |
@@ -206,8 +210,42 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 ./scripts/search.js --deadline 120 "query"
 ./scripts/search.js --full-sources "debug provider raw"
 ./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --responses-x-search --responses-allowed-x-handles xai,OpenAI "query"
 ```
+
+### 检索源
+
+`--source` 选择挂载哪些 Grok 服务端工具，默认 `web`：
+
+```bash
+./scripts/search.js --source x "X 上怎么评价 grok-4.6"          # 只查 X
+./scripts/search.js --source both "grok-4.6 发布后的反响"        # Grok 自行路由
+./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
+./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./scripts/search.js --source x --x-images "query"               # 分析帖子中的图片
+```
+
+- `x_search` 支持 handle allow/deny（互斥，各上限 20）、`--x-from-date` / `--x-to-date`（`YYYY-MM-DD`）、`--x-images` / `--x-videos`（默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关）。
+- **命令行**的 X 过滤参数会把未显式指定的 `--source` 提升为 `both`；与显式 `--source web` 同时出现则报 `SEARCH_SOURCE_CONFLICT`。配置文件里的 X 过滤项只在 X 检索开启时生效，不会自己把档位提升上去。
+- `--responses-x-search` 保留为 `--source both` 的别名。
+- X 检索计费 $5 / 1k calls，与 web search 同价，实际次数见 `diagnostics.responses_x_search_calls`。
+- Tavily / Firecrawl extra 源只搜网页，不搜 X；想要纯 X 证据请配合 `--no-extra`。
+- OpenRouter 会自动把 `x_search` 挂在 native web search 上，`--source` 在该路径下只是提示，未被强制执行时会写入 `diagnostics.warnings`。
+
+X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 source card 会从 URL 还原署名：
+
+```json
+{
+  "provider": "grok-responses",
+  "source_type": "citation",
+  "tool": "x_search",
+  "url": "https://x.com/xai/status/2087942296721559607",
+  "title": "@xai",
+  "x_handle": "xai",
+  "x_post_id": "2087942296721559607"
+}
+```
+
+帖子正文与日期不在 card 中，而在 `answer.text` 里按 handle + 日期署名。
 
 `search.js` 只使用 Responses 协议，以 `stream:false` 调用 `{GROK_API_URL}/responses`，启用 provider-native web search，并返回：
 
