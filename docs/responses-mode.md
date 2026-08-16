@@ -81,6 +81,25 @@ auto | native | exa | firecrawl | parallel | perplexity
 
 模型名不会自动追加 `:online`。
 
+## 配置与命令行的优先级
+
+优先级从高到低：命令行参数 > 环境变量 > 配置文件 > 兜底默认。
+
+需要注意 **配置文件由使用者书写，命令行参数由调用本工具的 agent 书写**，两者作者不同。因此标量配置是**默认值**语义、命令行可以覆盖（实际生效值始终记录在 `diagnostics.options`，可事后审计），但配置中的**限制**不会被命令行静默抹掉。
+
+allow-list 与 deny-list 都是限制：deny-list 去掉列举的值，allow-list 去掉没列举的一切。命令行只能收紧，不能放宽。
+
+| 配置 | 命令行 | 结果 |
+| --- | --- | --- |
+| deny-list | allow-list | 允许（deny 自动满足）；若显式请求了已排除的值，报 `RESPONSES_FILTER_FORBIDDEN` |
+| deny-list | deny-list | 合并去重；超过上限（domain 5）报 `RESPONSES_FILTER_LIMIT` |
+| allow-list | allow-list | 必须是配置清单的子集，否则报 `RESPONSES_FILTER_FORBIDDEN` |
+| allow-list | deny-list | 从配置清单里减掉；减空报 `RESPONSES_FILTER_EMPTY`（空 allow-list 对 API 等于「不限制」，与配置意图相反） |
+
+比较一律不区分大小写。
+
+本工具没有「命令行完全不可覆盖」的硬策略层。若确有此需求，请提 issue 说明场景。
+
 ## Responses sources
 
 解析器收集：

@@ -252,6 +252,123 @@ await withServer(
   }
 );
 
+// Config is written by the user and CLI args by the agent, so a CLI filter must never
+// silently discard a configured restriction.
+{
+  const denyHome = await mkdtemp(path.join(tmpdir(), "grok-search-deny-"));
+  await mkdir(path.join(denyHome, ".config", "grok-search"), { recursive: true });
+  await writeFile(
+    path.join(denyHome, ".config", "grok-search", "config.json"),
+    JSON.stringify({ responsesExcludedDomains: ["reddit.com", "quora.com"] }),
+    "utf8"
+  );
+  const denyEnv = (port) => ({ ...baseGrokEnv(port), HOME: denyHome, USERPROFILE: denyHome });
+
+  await withServer(
+    (req, res) => {
+      readJson(req, () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(responsesPayload()));
+      });
+    },
+    async (_server, port) => {
+      // An allow-list is stronger than a deny-list, so a non-conflicting one is honored.
+      let output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-allowed-domains", "github.com", "q"], denyEnv(port)))
+          .stdout
+      );
+      assert.deepEqual(output.diagnostics.options.responses_allowed_domains, ["github.com"]);
+      assert.deepEqual(output.diagnostics.options.responses_excluded_domains, []);
+
+      // Two deny-lists compose instead of the CLI replacing the configured one.
+      output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "medium.com", "q"], denyEnv(port)))
+          .stdout
+      );
+      assert.deepEqual(output.diagnostics.options.responses_excluded_domains, ["reddit.com", "quora.com", "medium.com"]);
+
+      // Merging is case-insensitive and does not duplicate.
+      output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "REDDIT.com", "q"], denyEnv(port)))
+          .stdout
+      );
+      assert.deepEqual(output.diagnostics.options.responses_excluded_domains, ["reddit.com", "quora.com"]);
+    }
+  );
+
+  // Explicitly asking for an excluded value is the one real conflict.
+  for (const [args, expected] of [
+    [["--responses-allowed-domains", "reddit.com"], "reddit.com"],
+    [["--responses-allowed-domains", "github.com,QUORA.com"], "QUORA.com"],
+  ]) {
+    result = await runNode(["scripts/search.js", "--no-extra", ...args, "q"], denyEnv(1));
+    assert.notEqual(result.code, 0);
+    const output = parseJson(result.stdout);
+    assert.equal(output.error.code, "RESPONSES_FILTER_FORBIDDEN");
+    assert.match(output.error.message, new RegExp(expected));
+  }
+
+  // A merged deny-list that overflows the provider cap must fail loudly, not silently drop.
+  await writeFile(
+    path.join(denyHome, ".config", "grok-search", "config.json"),
+    JSON.stringify({ responsesExcludedDomains: ["a.com", "b.com", "c.com", "d.com", "e.com"] }),
+    "utf8"
+  );
+  result = await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "f.com", "q"], denyEnv(1));
+  assert.notEqual(result.code, 0);
+  assert.equal(parseJson(result.stdout).error.code, "RESPONSES_FILTER_LIMIT");
+}
+
+// A configured allow-list is the strongest restriction of all: CLI filters narrow it,
+// never widen it back to the open web.
+{
+  const allowHome = await mkdtemp(path.join(tmpdir(), "grok-search-allow-"));
+  await mkdir(path.join(allowHome, ".config", "grok-search"), { recursive: true });
+  await writeFile(
+    path.join(allowHome, ".config", "grok-search", "config.json"),
+    JSON.stringify({ responsesAllowedDomains: ["docs.python.org", "peps.python.org"] }),
+    "utf8"
+  );
+  const allowEnv = (port) => ({ ...baseGrokEnv(port), HOME: allowHome, USERPROFILE: allowHome });
+
+  await withServer(
+    (req, res) => {
+      readJson(req, () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(responsesPayload()));
+      });
+    },
+    async (_server, port) => {
+      // A CLI deny-list subtracts from the configured allow-list instead of replacing it.
+      let output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "peps.python.org", "q"], allowEnv(port)))
+          .stdout
+      );
+      assert.deepEqual(output.diagnostics.options.responses_allowed_domains, ["docs.python.org"]);
+      assert.deepEqual(output.diagnostics.options.responses_excluded_domains, []);
+
+      // A CLI allow-list must be a subset of it.
+      output = parseJson(
+        (await runNode(["scripts/search.js", "--no-extra", "--responses-allowed-domains", "DOCS.python.org", "q"], allowEnv(port)))
+          .stdout
+      );
+      assert.deepEqual(output.diagnostics.options.responses_allowed_domains, ["DOCS.python.org"]);
+    }
+  );
+
+  result = await runNode(["scripts/search.js", "--no-extra", "--responses-allowed-domains", "github.com", "q"], allowEnv(1));
+  assert.notEqual(result.code, 0);
+  assert.equal(parseJson(result.stdout).error.code, "RESPONSES_FILTER_FORBIDDEN");
+
+  // Emptying the allow-list would mean "no restriction" to the API — the opposite of intent.
+  result = await runNode(
+    ["scripts/search.js", "--no-extra", "--responses-excluded-domains", "docs.python.org,peps.python.org", "q"],
+    allowEnv(1)
+  );
+  assert.notEqual(result.code, 0);
+  assert.equal(parseJson(result.stdout).error.code, "RESPONSES_FILTER_EMPTY");
+}
+
 await withServer(
   (req, res) => {
     assert.equal(req.url, "/responses");
