@@ -157,7 +157,7 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | 否 | Responses | 逗号分隔 domain allow-list，最多 5 个；与 excluded 互斥。 |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | 否 | Responses | 逗号分隔 domain deny-list，最多 5 个；与 allowed 互斥。 |
 | `GROK_SEARCH_SOURCE` | `searchSource` | 否 | Responses | 默认检索源：`web`、`x` 或 `both`。默认 `web`。 |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | 否 | Responses | 旧布尔开关，等价 `searchSource: both`；被 `--source` 与 `GROK_SEARCH_SOURCE` 覆盖。建议改用 `searchSource`。 |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | 否 | Responses | **已弃用，将在后续版本移除**。等价 `searchSource: both`，被 `--source` 与 `GROK_SEARCH_SOURCE` 覆盖；仍由它决定档位时会写入 `diagnostics.warnings`。请改用 `searchSource`。 |
 | `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | 否 | Responses | X handle allow-list，最多 20 个；与 excluded 互斥。 |
 | `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | 否 | Responses | X handle deny-list，最多 20 个；与 allowed 互斥。 |
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | 否 | Responses | 分析 X 帖子中的图片，按 token 额外计费。默认 `false`。 |

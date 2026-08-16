@@ -105,7 +105,7 @@ Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | Web Search allow-list，最多 5 个 |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | Web Search deny-list，最多 5 个 |
 | `GROK_SEARCH_SOURCE` | 默认检索源 `web` / `x` / `both`，默认 `web` |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | 旧布尔开关，等价 `both` |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | 已弃用，等价 `both`；生效时会告警 |
 | `GROK_RESPONSES_ALLOWED_X_HANDLES` | X handle allow-list，最多 20 个 |
 | `GROK_RESPONSES_EXCLUDED_X_HANDLES` | X handle deny-list，最多 20 个 |
 | `GROK_X_IMAGE_UNDERSTANDING` | 分析 X 帖子图片，按 token 计费 |

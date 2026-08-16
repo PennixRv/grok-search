@@ -164,7 +164,7 @@ Supported variables:
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | No | Responses | Comma-separated domain allow-list, max 5; mutually exclusive with excluded domains. |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | No | Responses | Comma-separated domain deny-list, max 5; mutually exclusive with allowed domains. |
 | `GROK_SEARCH_SOURCE` | `searchSource` | No | Responses | Default search source: `web`, `x`, or `both`. Default: `web`. |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | No | Responses | Legacy boolean, equivalent to `searchSource: both` and outranked by `--source` and `GROK_SEARCH_SOURCE`. Prefer `searchSource`. |
+| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | No | Responses | **Deprecated, will be removed in a later release.** Equivalent to `searchSource: both`, and outranked by `--source` and `GROK_SEARCH_SOURCE`; a `diagnostics.warnings` entry is emitted while it still decides the source. Use `searchSource` instead. |
 | `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | No | Responses | X handle allow-list, max 20; mutually exclusive with excluded handles. |
 | `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | No | Responses | X handle deny-list, max 20; mutually exclusive with allowed handles. |
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | No | Responses | Analyze images inside X posts; billed as extra tokens. Default: `false`. |

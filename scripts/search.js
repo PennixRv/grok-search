@@ -515,14 +515,16 @@ function resolveSearchSource(args, config) {
   const configured = config.responsesSearchSource || (legacyBoth ? "both" : "");
   const requested = args.searchSource || configured;
   const source = normalizeSearchSource(requested || "web");
+  // Only report the deprecated boolean when nothing else decided the source.
+  const usedLegacy = Boolean(legacyBoth) && !args.searchSource;
   const explicit = Boolean(requested);
-  if (!xOptionsRequested(args) || usesXSearch(source)) return { source, explicit };
+  if (!xOptionsRequested(args) || usesXSearch(source)) return { source, usedLegacy, explicit };
   // X-specific filters are meaningless without X search: promote a defaulted source,
   // but never silently override an explicit --source web.
   if (args.searchSource) {
     throw new ConfigError("--source web 与 X 过滤参数（handles / dates / media）冲突", "SEARCH_SOURCE_CONFLICT");
   }
-  return { source: "both", explicit };
+  return { source: "both", usedLegacy: false, explicit };
 }
 
 function resolveSearchOptions(args, config) {
@@ -565,6 +567,7 @@ function resolveSearchOptions(args, config) {
     allowedDomains,
     excludedDomains,
     searchSource: source.source,
+    usedLegacySearchSource: source.usedLegacy,
     explicitSearchSource: source.explicit,
     allowedXHandles,
     excludedXHandles,
@@ -583,6 +586,11 @@ function resolveSearchOptions(args, config) {
  */
 function searchSourceWarnings(searchOptions, config) {
   const warnings = [];
+  if (searchOptions.usedLegacySearchSource) {
+    warnings.push(
+      'responsesIncludeXSearch / GROK_RESPONSES_INCLUDE_X_SEARCH is deprecated and will be removed; set searchSource (or GROK_SEARCH_SOURCE) to "both" instead.'
+    );
+  }
   if (config.apiProvider !== "openrouter") return warnings;
 
   const { searchSource, openRouterEngine } = searchOptions;

@@ -582,7 +582,7 @@ await withServer(
   }
 );
 
-// The legacy boolean keeps working as an alias for the "both" mode.
+// The deprecated boolean still works, but only warns when it actually decided the source.
 {
   const legacyHome = await mkdtemp(path.join(tmpdir(), "grok-search-legacy-x-"));
   await mkdir(path.join(legacyHome, ".config", "grok-search"), { recursive: true });
@@ -593,6 +593,7 @@ await withServer(
       "utf8"
     );
   const legacyEnv = (port) => ({ ...baseGrokEnv(port), HOME: legacyHome, USERPROFILE: legacyHome });
+  const isDeprecationWarning = (warning) => /responsesIncludeXSearch/.test(warning);
 
   await withServer(
     (req, res) => {
@@ -605,23 +606,26 @@ await withServer(
       await writeLegacyConfig(true);
       let output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], legacyEnv(port))).stdout);
       assert.equal(output.diagnostics.options.search_source, "both");
+      assert.equal(output.diagnostics.warnings.filter(isDeprecationWarning).length, 1);
 
-      // An explicit --source decides instead.
+      // An explicit --source decides instead, so the notice stays quiet.
       output = parseJson(
         (await runNode(["scripts/search.js", "--no-extra", "--source", "both", "mock query"], legacyEnv(port))).stdout
       );
       assert.equal(output.diagnostics.options.search_source, "both");
+      assert.equal(output.diagnostics.warnings.some(isDeprecationWarning), false);
 
       // GROK_SEARCH_SOURCE also outranks the boolean.
       output = parseJson(
-        (await runNode(["scripts/search.js", "--no-extra", "mock query"], { ...legacyEnv(port), GROK_SEARCH_SOURCE: "x" })).stdout
+        (await runNode(["scripts/search.js", "--no-extra", "mock query"], { ...legacyEnv(port), GROK_SEARCH_SOURCE: "both" })).stdout
       );
-      assert.equal(output.diagnostics.options.search_source, "x");
+      assert.equal(output.diagnostics.warnings.some(isDeprecationWarning), false);
 
-      // false is indistinguishable from absent.
+      // false is indistinguishable from absent: web search, no notice.
       await writeLegacyConfig(false);
       output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], legacyEnv(port))).stdout);
       assert.equal(output.diagnostics.options.search_source, "web");
+      assert.equal(output.diagnostics.warnings.some(isDeprecationWarning), false);
     }
   );
 }
