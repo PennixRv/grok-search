@@ -77,7 +77,6 @@ chmod 600 ~/.config/grok-search/config.json
   "responsesReasoningEffort": "low",
   "responsesAllowedDomains": [],
   "responsesExcludedDomains": [],
-  "responsesIncludeXSearch": false,
   "responsesAllowedXHandles": [],
   "responsesExcludedXHandles": [],
   "responsesOpenRouterEngine": "auto",
@@ -104,6 +103,7 @@ chmod 600 ~/.config/grok-search/config.json
 - `model` 必须填写该 endpoint 实际支持的模型 ID；`responsesMaxTurns` 是不小于 1 的整数。`responsesReasoningEffort` 常见值为 `low`、`medium`、`high`，但是否支持取决于具体模型与 provider。
 - `responsesAllowedDomains`、`responsesExcludedDomains`、`responsesAllowedXHandles`、`responsesExcludedXHandles` 都是数组，可以填写多个值，例如 `["github.com", "docs.python.org"]`；同一组 allowed 与 excluded 不能同时使用。domain 上限 5 个，X handle 上限 20 个。环境变量中的多值使用逗号分隔。
 - `searchSource` 可选 `web`、`x` 或 `both`，决定默认挂载哪些检索工具；命令行 `--source` 优先。X 的日期窗口是按查询变化的，只能用 `--x-from-date` / `--x-to-date` 传入，没有对应配置项。
+- 旧配置项 `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` 已移除（2026-08 弃用，2026-09 删除）。值为 `true` 时命令直接报 `CONFIG_OPTION_REMOVED` 而不是静默丢掉 X 检索，请改为 `searchSource: "both"`；`false` 或缺失不受影响。
 - 优先级为 命令行 > 环境变量 > 配置文件 > 默认值。注意配置文件由你书写、命令行参数由调用本工具的 agent 书写：标量配置（如 `searchSource`）是**默认值**，agent 可以覆盖，实际生效值见 `diagnostics.options`；但配置里的**限制**不会被静默抹掉——allow-list 与 deny-list 都是限制，命令行只能收紧不能放宽。越界报 `RESPONSES_FILTER_FORBIDDEN`，把 allow-list 减空报 `RESPONSES_FILTER_EMPTY`，两个 deny-list 合并而非替换。规则见 [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级)。
 - `responsesOpenRouterEngine` 可选 `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`，仅在 `apiProvider` 为 `openrouter` 时生效。
 - `tavilyApiKey` 可留空；`firecrawlApiKey` 也可留空并使用 Firecrawl Keyless。`outputDir` 留空时使用默认目录 `~/.cache/grok-search/outputs/`；`stateDir` 留空时使用 `~/.cache/grok-search/`，存放 Firecrawl 冷却状态；`runLog: false` 关闭每次调用的运行记录落盘。
@@ -161,7 +161,6 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | 否 | Responses | 逗号分隔 domain allow-list，最多 5 个；与 excluded 互斥。 |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | 否 | Responses | 逗号分隔 domain deny-list，最多 5 个；与 allowed 互斥。 |
 | `GROK_SEARCH_SOURCE` | `searchSource` | 否 | Responses | 默认检索源：`web`、`x` 或 `both`。默认 `web`。 |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | 否 | Responses | **已弃用，将在后续版本移除**。等价 `searchSource: both`，被 `--source` 与 `GROK_SEARCH_SOURCE` 覆盖；仍由它决定档位时会写入 `diagnostics.warnings`。请改用 `searchSource`。 |
 | `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | 否 | Responses | X handle allow-list，最多 20 个；与 excluded 互斥。 |
 | `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | 否 | Responses | X handle deny-list，最多 20 个；与 allowed 互斥。 |
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | 否 | Responses | 分析 X 帖子中的图片，按 token 额外计费。默认 `false`。 |

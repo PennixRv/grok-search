@@ -212,7 +212,7 @@ function parseArgs(argv) {
       if (!searchSource) throw new Error("--source 缺少值");
       continue;
     }
-    // Legacy aliases: the boolean switch is now the "both" mode.
+    // Aliases kept from before --source existed; both mean the "both" mode.
     if (arg === "--responses-x-search" || arg === "--responses-include-x-search") {
       searchSource = "both";
       continue;
@@ -581,20 +581,16 @@ function xOptionsRequested(args) {
 }
 
 function resolveSearchSource(args, config) {
-  const legacyBoth = !config.responsesSearchSource && config.responsesIncludeXSearch;
-  const configured = config.responsesSearchSource || (legacyBoth ? "both" : "");
-  const requested = args.searchSource || configured;
+  const requested = args.searchSource || config.responsesSearchSource;
   const source = normalizeSearchSource(requested || "web");
-  // Only report the deprecated boolean when nothing else decided the source.
-  const usedLegacy = Boolean(legacyBoth) && !args.searchSource;
   const explicit = Boolean(requested);
-  if (!xOptionsRequested(args) || usesXSearch(source)) return { source, usedLegacy, explicit };
+  if (!xOptionsRequested(args) || usesXSearch(source)) return { source, explicit };
   // X-specific filters are meaningless without X search: promote a defaulted source,
   // but never silently override an explicit --source web.
   if (args.searchSource) {
     throw new ConfigError("--source web 与 X 过滤参数（handles / dates / media）冲突", "SEARCH_SOURCE_CONFLICT");
   }
-  return { source: "both", usedLegacy: false, explicit };
+  return { source: "both", explicit };
 }
 
 function resolveSearchOptions(args, config) {
@@ -638,7 +634,6 @@ function resolveSearchOptions(args, config) {
     allowedDomains,
     excludedDomains,
     searchSource: source.source,
-    usedLegacySearchSource: source.usedLegacy,
     explicitSearchSource: source.explicit,
     allowedXHandles,
     excludedXHandles,
@@ -658,11 +653,6 @@ function resolveSearchOptions(args, config) {
  */
 function searchSourceWarnings(searchOptions, config) {
   const warnings = [];
-  if (searchOptions.usedLegacySearchSource) {
-    warnings.push(
-      'responsesIncludeXSearch / GROK_RESPONSES_INCLUDE_X_SEARCH is deprecated and will be removed; set searchSource (or GROK_SEARCH_SOURCE) to "both" instead.'
-    );
-  }
   if (config.apiProvider !== "openrouter") return warnings;
 
   const { searchSource, openRouterEngine } = searchOptions;

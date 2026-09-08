@@ -32,7 +32,6 @@ async function runNode(args, env = {}) {
         GROK_DEADLINE_SECONDS: "",
         GROK_RESPONSES_MAX_TURNS: "",
         GROK_SEARCH_SOURCE: "",
-        GROK_RESPONSES_INCLUDE_X_SEARCH: "",
         GROK_SEARCH_MODE: "",
         GROK_RESPONSES_FALLBACK_CHAT: "",
         ...env,
@@ -750,50 +749,49 @@ await withServer(
   }
 );
 
-// The deprecated boolean still works, but only warns when it actually decided the source.
+// The removed boolean fails loudly where it would have changed results and stays silent otherwise.
 {
-  const legacyHome = await mkdtemp(path.join(tmpdir(), "grok-search-legacy-x-"));
-  await mkdir(path.join(legacyHome, ".config", "grok-search"), { recursive: true });
-  const writeLegacyConfig = (value) =>
+  const removedHome = await mkdtemp(path.join(tmpdir(), "grok-search-removed-x-"));
+  await mkdir(path.join(removedHome, ".config", "grok-search"), { recursive: true });
+  const writeRemovedConfig = (value) =>
     writeFile(
-      path.join(legacyHome, ".config", "grok-search", "config.json"),
+      path.join(removedHome, ".config", "grok-search", "config.json"),
       JSON.stringify({ responsesIncludeXSearch: value }),
       "utf8"
     );
-  const legacyEnv = (port) => ({ ...baseGrokEnv(port), HOME: legacyHome, USERPROFILE: legacyHome });
-  const isDeprecationWarning = (warning) => /responsesIncludeXSearch/.test(warning);
+  const removedEnv = (port) => ({ ...baseGrokEnv(port), HOME: removedHome, USERPROFILE: removedHome });
+  const mentionsRemoved = (warning) => /responsesIncludeXSearch/.test(warning);
 
   await withServer(
     (req, res) => {
-      readJson(req, (body) => {
+      readJson(req, () => {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(body.tools.length === 2 ? xPayload() : responsesPayload()));
+        res.end(JSON.stringify(responsesPayload()));
       });
     },
     async (_server, port) => {
-      await writeLegacyConfig(true);
-      let output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], legacyEnv(port))).stdout);
-      assert.equal(output.diagnostics.options.search_source, "both");
-      assert.equal(output.diagnostics.warnings.filter(isDeprecationWarning).length, 1);
+      // true used to attach X search; silently dropping that would change results.
+      await writeRemovedConfig(true);
+      let result = await runNode(["scripts/search.js", "--no-extra", "mock query"], removedEnv(port));
+      assert.notEqual(result.code, 0);
+      let output = parseJson(result.stdout);
+      assert.equal(output.error.code, "CONFIG_OPTION_REMOVED");
+      assert.match(output.error.message, /searchSource/);
 
-      // An explicit --source decides instead, so the notice stays quiet.
-      output = parseJson(
-        (await runNode(["scripts/search.js", "--no-extra", "--source", "both", "mock query"], legacyEnv(port))).stdout
-      );
-      assert.equal(output.diagnostics.options.search_source, "both");
-      assert.equal(output.diagnostics.warnings.some(isDeprecationWarning), false);
+      // The environment form is rejected the same way, whatever the file says.
+      await writeRemovedConfig(false);
+      result = await runNode(["scripts/search.js", "--no-extra", "mock query"], {
+        ...removedEnv(port),
+        GROK_RESPONSES_INCLUDE_X_SEARCH: "true",
+      });
+      assert.equal(parseJson(result.stdout).error.code, "CONFIG_OPTION_REMOVED");
 
-      // GROK_SEARCH_SOURCE also outranks the boolean.
-      output = parseJson(
-        (await runNode(["scripts/search.js", "--no-extra", "mock query"], { ...legacyEnv(port), GROK_SEARCH_SOURCE: "both" })).stdout
-      );
-      assert.equal(output.diagnostics.warnings.some(isDeprecationWarning), false);
-
-      // false is indistinguishable from absent: web search, no notice.
-      await writeLegacyConfig(false);
-      output = parseJson((await runNode(["scripts/search.js", "--no-extra", "mock query"], legacyEnv(port))).stdout);
+      // false never did anything, so it keeps working: web search, nothing to warn about.
+      result = await runNode(["scripts/search.js", "--no-extra", "mock query"], removedEnv(port));
+      assert.equal(result.code, 0);
+      output = parseJson(result.stdout);
       assert.equal(output.diagnostics.options.search_source, "web");
-      assert.equal(output.diagnostics.warnings.some(isDeprecationWarning), false);
+      assert.equal(output.diagnostics.warnings.some(mentionsRemoved), false);
     }
   );
 }

@@ -79,7 +79,7 @@
 - **命令行**的 X 过滤参数会把未显式指定的 `--source` 提升为 `both`；显式 `--source web` 与它们同时出现会报 `SEARCH_SOURCE_CONFLICT`。配置文件里的 handle 清单与媒体开关不会提升档位——它们是「X 检索运行时该怎么过滤」的偏好，不是开启一条额外计费检索通道的请求。
 - 启用 X 时会追加第二条 system message（X 证据准则），基础 prompt 仍是第一条，保持 prompt cache 前缀稳定。
 - `--responses-x-search` / `--responses-include-x-search` 保留为 `--source both` 的别名。
-- 配置项 `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` 已弃用：仍等价 `both`，但优先级低于 `--source` 和 `GROK_SEARCH_SOURCE`，且只有在它真正决定档位时才写弃用告警（值为 `false` 或缺失时与不存在完全等价，不告警）。后续版本移除。
+- 配置项 `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` 已移除（2026-08-16 弃用，2026-09-08 删除）。值为 `true` 时 `loadConfig` 直接报 `CONFIG_OPTION_REMOVED`：忽略它会静默丢掉 X 检索，所以宁可失败；`false` 或缺失从来等价于不存在，不受影响。改用 `searchSource: "both"`。
 
 X 检索计费为 $5 / 1k calls，与 web search 同价；实际调用次数见 `diagnostics.responses_x_search_calls`。
 

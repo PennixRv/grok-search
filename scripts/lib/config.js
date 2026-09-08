@@ -175,8 +175,27 @@ export function normalizeOpenRouterSearchEngine(value) {
   );
 }
 
+// Options removed after a deprecation window. A truthy value used to change results (it
+// attached X search), so ignoring it would fail silently; refuse to start instead. A false or
+// missing value never did anything and stays accepted.
+const REMOVED_OPTIONS = [
+  {
+    env: "GROK_RESPONSES_INCLUDE_X_SEARCH",
+    keys: ["responsesIncludeXSearch", "responses_include_x_search", "GROK_RESPONSES_INCLUDE_X_SEARCH"],
+    replacement: 'searchSource: "both"（或 GROK_SEARCH_SOURCE=both / --source both）',
+  },
+];
+
+function rejectRemovedOptions(fileConfig) {
+  for (const option of REMOVED_OPTIONS) {
+    if (!envOrFileBool(option.env, fileConfig, option.keys, false)) continue;
+    throw new ConfigError(`${option.keys[0]} / ${option.env} 已移除，请改用 ${option.replacement}`, "CONFIG_OPTION_REMOVED");
+  }
+}
+
 export async function loadConfig({ requireGrok = false } = {}) {
   const fileConfig = await loadConfigFile();
+  rejectRemovedOptions(fileConfig);
   const grokApiUrl = envOrFile("GROK_API_URL", fileConfig, ["GROK_API_URL", "grokApiUrl", "grok_api_url", "apiUrl", "api_url"]);
   const grokApiKey = envOrFile("GROK_API_KEY", fileConfig, ["GROK_API_KEY", "grokApiKey", "grok_api_key", "apiKey", "api_key"]);
   const rawApiProvider = envOrFile("GROK_API_PROVIDER", fileConfig, [
@@ -251,12 +270,6 @@ export async function loadConfig({ requireGrok = false } = {}) {
       ["GROK_SEARCH_SOURCE", "searchSource", "search_source"],
       ""
     ),
-    // Legacy boolean kept as a fallback; it now means searchSource "both".
-    responsesIncludeXSearch: envOrFileBool("GROK_RESPONSES_INCLUDE_X_SEARCH", fileConfig, [
-      "GROK_RESPONSES_INCLUDE_X_SEARCH",
-      "responsesIncludeXSearch",
-      "responses_include_x_search",
-    ], false),
     responsesAllowedXHandles: envOrFileList("GROK_RESPONSES_ALLOWED_X_HANDLES", fileConfig, [
       "GROK_RESPONSES_ALLOWED_X_HANDLES",
       "responsesAllowedXHandles",

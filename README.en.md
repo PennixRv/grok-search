@@ -77,7 +77,6 @@ Full configuration example:
   "responsesReasoningEffort": "low",
   "responsesAllowedDomains": [],
   "responsesExcludedDomains": [],
-  "responsesIncludeXSearch": false,
   "responsesAllowedXHandles": [],
   "responsesExcludedXHandles": [],
   "responsesOpenRouterEngine": "auto",
@@ -104,6 +103,7 @@ Common configuration rules:
 - `model` must be an ID supported by that endpoint. `responsesMaxTurns` is an integer of at least 1. Common `responsesReasoningEffort` values are `low`, `medium`, and `high`, but support depends on the selected model and provider.
 - `responsesAllowedDomains`, `responsesExcludedDomains`, `responsesAllowedXHandles`, and `responsesExcludedXHandles` are arrays and may contain multiple values, for example `["github.com", "docs.python.org"]`. The allowed and excluded forms of the same filter are mutually exclusive. Domains are capped at 5, X handles at 20. In environment variables, separate multiple values with commas.
 - `searchSource` accepts `web`, `x`, or `both` and selects which search tools are attached by default; the `--source` flag takes precedence. X date windows vary per query and are only available as `--x-from-date` / `--x-to-date`, with no config counterpart.
+- The old `responsesIncludeXSearch` / `GROK_RESPONSES_INCLUDE_X_SEARCH` option has been removed (deprecated 2026-08, removed 2026-09). A `true` value now fails with `CONFIG_OPTION_REMOVED` instead of silently dropping X search; switch to `searchSource: "both"`. `false` or absent is unaffected.
 - Precedence is CLI > environment > config file > built-in default. Note that you write the config file while the agent invoking this tool writes the CLI args: scalar settings such as `searchSource` are **defaults** the agent may override, and the value actually used is always recorded in `diagnostics.options`. Configured **restrictions**, however, are never silently discarded — allow-lists and deny-lists are both restrictions, and CLI values may only narrow them. Stepping outside one raises `RESPONSES_FILTER_FORBIDDEN`, emptying an allow-list raises `RESPONSES_FILTER_EMPTY`, and two deny-lists are merged rather than replaced. See [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级).
 - `responsesOpenRouterEngine` accepts `auto`, `native`, `exa`, `firecrawl`, `parallel`, or `perplexity`, and only applies when `apiProvider` is `openrouter`.
 - `tavilyApiKey` is optional. `firecrawlApiKey` may also be empty to use Firecrawl Keyless. An empty `outputDir` uses `~/.cache/grok-search/outputs/`; an empty `stateDir` uses `~/.cache/grok-search/` for the Firecrawl cooldown state. `runLog: false` disables the per-run record files.
@@ -168,7 +168,6 @@ Supported variables:
 | `GROK_RESPONSES_ALLOWED_DOMAINS` | `responsesAllowedDomains` | No | Responses | Comma-separated domain allow-list, max 5; mutually exclusive with excluded domains. |
 | `GROK_RESPONSES_EXCLUDED_DOMAINS` | `responsesExcludedDomains` | No | Responses | Comma-separated domain deny-list, max 5; mutually exclusive with allowed domains. |
 | `GROK_SEARCH_SOURCE` | `searchSource` | No | Responses | Default search source: `web`, `x`, or `both`. Default: `web`. |
-| `GROK_RESPONSES_INCLUDE_X_SEARCH` | `responsesIncludeXSearch` | No | Responses | **Deprecated, will be removed in a later release.** Equivalent to `searchSource: both`, and outranked by `--source` and `GROK_SEARCH_SOURCE`; a `diagnostics.warnings` entry is emitted while it still decides the source. Use `searchSource` instead. |
 | `GROK_RESPONSES_ALLOWED_X_HANDLES` | `responsesAllowedXHandles` | No | Responses | X handle allow-list, max 20; mutually exclusive with excluded handles. |
 | `GROK_RESPONSES_EXCLUDED_X_HANDLES` | `responsesExcludedXHandles` | No | Responses | X handle deny-list, max 20; mutually exclusive with allowed handles. |
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | No | Responses | Analyze images inside X posts; billed as extra tokens. Default: `false`. |
