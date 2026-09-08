@@ -197,17 +197,17 @@ Tavily Search（有 key）───────┼─ sources.items（去重合�
 Firecrawl Search（Keyless/key）┘
 ```
 
-默认合计 6 条；两家可用时 3/3。Firecrawl provider attempt 会包含 `auth_mode`，可能包含 `credits_used`。
+默认合计 6 条；两家可用时 3/3。Firecrawl provider attempt 会包含 `auth_mode`、`requests`、`duration_ms`，可能包含 `credits_used`；冷却期内为 `skipped: true`。域名过滤会下推给两家，域外结果在排序时降到最后并计入 `off_domain`。`--instructions` 不会传给两家。
 
 ## 额度错误
 
 只有明确额度信号触发 degraded success：
 
 - HTTP 402；
-- HTTP 429 且正文包含 quota、credit、balance、billing、rate limit 等信号；
+- HTTP 429 且正文包含 quota、credit、balance、billing、额度、余额等信号；
 - `insufficient_quota`、`credits_exhausted` 等错误码。
 
-降级输出同时包含人类可见警告和结构化 `diagnostics.grok_error`。`--no-extra` 时返回 `GROK_QUOTA_EXHAUSTED`。401/403、404/422、5xx、超时和空响应仍是普通错误。
+不带额度信号的 429 归为 `RATE_LIMITED`，降级行为相同但 `grok_error.code` 与 warning 文案如实区分。降级输出同时包含人类可见警告和结构化 `diagnostics.grok_error`。`--no-extra` 时返回 `GROK_QUOTA_EXHAUSTED` / `GROK_RATE_LIMITED`。401/403、404/422、5xx、超时和空响应仍是普通错误。
 
 ## Diagnostics
 
@@ -220,7 +220,11 @@ Firecrawl Search（Keyless/key）┘
 - `responses_x_search_calls`
 - `responses_tool_calls`
 
-工具调用次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的**逐工具较大值**。两边都不可单独信任：部分中转会计费 `x_search` 却不吐 `x_search_call` item（只看 `output[]` 会报 0），另一些会把该字段填成全 0（只看 usage 同样报 0）。`responses_tool_calls.total` 用同一口径，因此可能大于 `raw_path` 里记录的 tool call 明细条数。
+工具调用次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的**逐工具较大值**。两边都不可单独信任：部分中转会计费 `x_search` 却不吐 `x_search_call` item（只看 `output[]` 会报 0），另一些会把该字段填成全 0（只看 usage 同样报 0）。`responses_tool_calls` 摘要为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action: { search, open_page, find_in_page }, failed? }`：`total` 用较大值口径，`upstream` / `trace` 保留两侧原始计数，因此 `total` 可能大于 `raw_path` 里记录的 tool call 明细条数。
+- `search_budget`：`{ prompt_total: 6, prompt_x: 0|4, used_web, used_x, used_total, exceeded, enforced: false }`。prompt 里的预算是给模型的建议，不是上限：`max_turns` 限的是 agentic turn，一个 turn 可含多次检索，所以 `enforced` 恒为 false。请求侧能压次数的只有 `parallel_tool_calls: false`（`--responses-parallel-tool-calls false`，默认不发）：官方与透传的中转上每 turn 一次调用，但只在 `responses_tool_calls.total` 常超 6 时才省钱，grok-4.6 自然只跑 3–5 次、加了不省。`max_tool_calls` 官方与中转都不生效，未接入。模型本身是最大的费用杠杆（同题 grok-4.6 的调用是 grok-4.5 的 1/3–1/4）。`cost_usd` 是端点报的 `usage.cost_in_usd_ticks`，中转与官方对同一 usage 报的数可差一倍多，跨供应商不可比。实验过程与数据见 `.agent/tool-call-cap-2026-09-08.md`。
+- `responses_model`：中转实际返回的 `model`；与请求不同时写 warning。第一个中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，这才是它 2–3 倍调用次数的来源
+- 中转差异还包括：X 搜索以 `custom_tool_call`（`x_keyword_search` / `x_thread_fetch` …）形式返回，解析器按 `x_search` 计数并把 `by_action` 写成 `keyword_search` / `thread_fetch`；每个 turn 的过场 message（"I'll search X…"）被丢弃，`answer.text` 只取最后一条，除非前面的 message 很长或带 citation
+- `options.instructions_chars`（传了 `--instructions` 时）
 - `extra_allocation`
 - `firecrawl_auth_mode`
 - `degraded` / `grok_error`
