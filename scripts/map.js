@@ -2,7 +2,7 @@
 import { loadConfig } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
 import { cleanupOutputDir, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
-import { mapUrl } from "./lib/providers.js";
+import { DIRECT_MAP_REQUEST_TIMEOUT_SECONDS, mapUrl } from "./lib/providers.js";
 import { assertProxyUsable } from "./lib/proxy.js";
 
 const DEFAULTS = {
@@ -11,13 +11,18 @@ const DEFAULTS = {
   maxBreadth: 20,
   limit: 50,
   timeout: 150,
+  directTimeout: DIRECT_MAP_REQUEST_TIMEOUT_SECONDS,
   instructions: "",
 };
 
 function usage() {
-  return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--deadline SECONDS] <url>
+  return `Usage: ./scripts/map.js [--provider auto|tavily|direct] [--instructions TEXT] [--max-depth N] [--max-breadth N] [--limit N] [--timeout SECONDS] [--direct-timeout SECONDS] [--deadline SECONDS] <url>
 
 Discover same-site URLs with Tavily Map or a lightweight Direct Map fallback.
+
+Timeouts:
+  --timeout SECONDS         Crawl budget handed to Tavily Map (default 150)
+  --direct-timeout SECONDS  Per-request timeout for Direct Map's sitemap and home page fetches (default 30)
 
 Environment:
   TAVILY_API_KEY       Optional Tavily Map key
@@ -92,6 +97,14 @@ function parseArgs(argv) {
       out.timeout = parseIntOption("--timeout", arg.slice("--timeout=".length), { min: 1 });
       continue;
     }
+    if (arg === "--direct-timeout") {
+      out.directTimeout = parseIntOption("--direct-timeout", args.shift(), { min: 1 });
+      continue;
+    }
+    if (arg?.startsWith("--direct-timeout=")) {
+      out.directTimeout = parseIntOption("--direct-timeout", arg.slice("--direct-timeout=".length), { min: 1 });
+      continue;
+    }
     if (arg === "--deadline") {
       out.deadline = parseIntOption("--deadline", args.shift(), { min: 0 });
       continue;
@@ -137,6 +150,8 @@ function publicResult(args, result) {
       max_breadth: args.maxBreadth,
       limit: args.limit,
       timeout: args.timeout,
+      requestTimeout: args.directTimeout,
+      direct_timeout: args.directTimeout,
     },
     mapped_at: mappedAt,
   };

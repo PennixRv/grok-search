@@ -336,6 +336,8 @@ Tavily Map -> Direct Map
 
 Without `TAVILY_API_KEY`, Tavily Map is unavailable and `map.js` falls back to Direct Map. Direct Map only checks same-site `/sitemap.xml`, then same-domain links on the homepage. It ignores `--instructions` and supports only `--max-depth 1`.
 
+`--timeout` (default 150s) is the crawl budget handed to Tavily Map; Direct Map's own requests for the sitemap and home page use a separate `--direct-timeout` (default 30s), so one stalled request cannot consume most of the command deadline. Both values are recorded in `diagnostics.options`.
+
 Successful map output uses `urls` for discovered URLs. Provider, response time, ignored instructions, warnings, attempts, and options live under `diagnostics`, with the run record path under `diagnostics.run_path`.
 
 ## Output Files

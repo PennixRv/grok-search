@@ -3,6 +3,10 @@ import { isXUrl, parseXPostUrl } from "./sources.js";
 
 const DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024;
 const DIRECT_ERROR_PREVIEW_BYTES = 1000;
+// Direct Map fetches sitemap.xml and the home page itself; each request gets its own timeout,
+// separate from --timeout, which is Tavily's remote crawl budget (150s by default). A stalled
+// sitemap should not eat most of the 240s command deadline.
+export const DIRECT_MAP_REQUEST_TIMEOUT_SECONDS = 30;
 function withTimeout(timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -108,7 +112,7 @@ export async function directMap(url, options = {}) {
   const baseUrl = parsed.origin;
   const limit = options.limit || 50;
   const maxBreadth = options.maxBreadth || 20;
-  const timeout = options.timeout || 150;
+  const timeout = options.requestTimeout || DIRECT_MAP_REQUEST_TIMEOUT_SECONDS;
   const instructionsIgnored = Boolean(options.instructions);
 
   if (instructionsIgnored) {

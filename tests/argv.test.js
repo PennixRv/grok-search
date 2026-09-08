@@ -186,6 +186,20 @@ await withServer(
     const output = parseJson(mapResult.stdout);
     assert.deepEqual(output.urls, [`http://127.0.0.1:${port}/a`]);
     assert.equal(output.diagnostics.provider, "direct");
+    // --timeout is Tavily's crawl budget; Direct Map's own requests use --direct-timeout.
+    assert.equal(output.diagnostics.options.timeout, 150);
+    assert.equal(output.diagnostics.options.direct_timeout, 30);
+
+    const custom = parseJson(
+      (await runNode(["scripts/map.js", "--provider", "direct", "--direct-timeout", "5", `http://127.0.0.1:${port}/`])).stdout
+    );
+    assert.deepEqual(custom.urls, [`http://127.0.0.1:${port}/a`]);
+    assert.equal(custom.diagnostics.options.direct_timeout, 5);
+    assert.equal(custom.diagnostics.options.timeout, 150);
+
+    const invalid = await runNode(["scripts/map.js", "--provider", "direct", "--direct-timeout", "0", `http://127.0.0.1:${port}/`]);
+    assert.equal(invalid.code, 2);
+    assert.equal(parseJson(invalid.stdout).error.code, "ARGUMENT_ERROR");
   }
 );
 

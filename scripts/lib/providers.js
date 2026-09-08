@@ -14,6 +14,7 @@ export { authHeaders, backoffMs, debugLog, redactSecrets, requestJson, retryAfte
 export { tavilyExtract, tavilyMap, tavilySearch } from "./tavily.js";
 export { firecrawlAuthMode, firecrawlMetadata, firecrawlScrape, firecrawlSearch, isFirecrawlQuotaError } from "./firecrawl.js";
 export {
+  DIRECT_MAP_REQUEST_TIMEOUT_SECONDS,
   collapseRepeatedLines,
   directFetch,
   directFirstForX,

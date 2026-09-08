@@ -94,6 +94,7 @@ X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正
 ```bash
 ./scripts/map.js https://docs.example.com --limit 20
 ./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+./scripts/map.js --provider direct https://docs.example.com --direct-timeout 10   # Direct Map 每个请求的超时，独立于 Tavily 的 --timeout
 ```
 
 `auto` provider 顺序：

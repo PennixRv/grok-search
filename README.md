@@ -329,6 +329,8 @@ Tavily Map -> Direct Map
 
 没有 `TAVILY_API_KEY` 时，Tavily Map 不可用，`map.js` 会 fallback 到 Direct Map。Direct Map 只检查同站点 `/sitemap.xml`，然后提取首页同域名链接。它会忽略 `--instructions`，且只支持 `--max-depth 1`。
 
+`--timeout`（默认 150 秒）是交给 Tavily Map 的远端 crawl 预算；Direct Map 自己抓 sitemap 和首页时每个请求用独立的 `--direct-timeout`（默认 30 秒），一个卡住的请求不会吃掉整条命令的 deadline。两个值都记录在 `diagnostics.options`。
+
 map 成功输出使用 `urls` 表示发现的 URL。provider、response time、ignored instructions、warnings、attempts 和 options 都放在 `diagnostics`，运行记录路径在 `diagnostics.run_path`。
 
 ## 输出文件
