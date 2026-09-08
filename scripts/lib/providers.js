@@ -1,4 +1,6 @@
+import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage, recordFirecrawlCooldown } from "./cooldown.js";
 import { configureProxyFromEnv } from "./proxy.js";
+import { isXUrl, parseXPostUrl } from "./sources.js";
 
 configureProxyFromEnv();
 
@@ -15,7 +17,49 @@ function trimBody(text, max = 500) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-function redactSecrets(text, config) {
+function isPlainObject(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseErrorBody(text) {
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+// Firecrawl puts the wait in the body (`retry_after_seconds`) rather than in a header.
+// Firecrawl's per-minute limiter (paid and free keys alike) sends no Retry-After header and no
+// retry_after_seconds field, only prose: "... please retry after 15s, resets at ...". Reading it
+// turns three wasted requests in four seconds into one honest stop.
+const RETRY_AFTER_TEXT = /retry after\s+(\d+(?:\.\d+)?)\s*(ms|s|sec|seconds?|m|min|minutes?)\b/i;
+
+function bodyRetryAfterMs(body) {
+  const seconds = Number(body?.retry_after_seconds ?? body?.retry_after ?? body?.retryAfter);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const match = upstreamMessage(body)?.match(RETRY_AFTER_TEXT);
+  if (!match) return null;
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit === "ms") return value;
+  if (unit.startsWith("m")) return value * 60_000;
+  return value * 1000;
+}
+
+function upstreamCode(body) {
+  const code = body?.reason ?? body?.error?.code ?? body?.code;
+  return typeof code === "string" && code.trim() ? code.trim() : null;
+}
+
+export function upstreamMessage(body) {
+  const message = typeof body?.error === "string" ? body.error : (body?.error?.message ?? body?.message);
+  return typeof message === "string" && message.trim() ? message.trim() : null;
+}
+
+export function redactSecrets(text, config) {
   let out = String(text || "");
   for (const secret of [config?.grokApiKey, config?.tavilyApiKey, config?.firecrawlApiKey]) {
     if (typeof secret !== "string" || secret.length < 4) continue;
@@ -46,13 +90,21 @@ export function debugLog(config, message) {
   if (config?.debug) console.error(`[grok-search] ${message}`);
 }
 
-export async function requestJson(url, { headers, body, timeoutMs, config, retry = false, retryOnTimeout = true }) {
+/**
+ * POST JSON and parse the JSON reply.
+ *
+ * `stats.requests` (when a `stats` object is passed) counts the HTTP attempts actually made, so
+ * callers can report real request counts instead of configured maximums.
+ */
+export async function requestJson(url, { headers, body, timeoutMs, config, retry = false, retryOnTimeout = true, stats = null }) {
   const maxAttempts = retry ? config.retryMaxAttempts : 1;
+  const waitBudgetMs = config.retryMaxWait * 1000;
   let lastError;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    if (stats) stats.requests = (stats.requests || 0) + 1;
 
     try {
       const response = await fetch(url, {
@@ -65,9 +117,12 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
       clearTimeout(timer);
 
       if (!response.ok) {
+        const errorBody = parseErrorBody(text);
         const error = new Error(`HTTP ${response.status}: ${redactSecrets(trimBody(text), config)}`);
         error.status = response.status;
-        error.retryAfterMs = retryAfterMs(response.headers);
+        error.retryAfterMs = retryAfterMs(response.headers) ?? bodyRetryAfterMs(errorBody);
+        error.upstreamCode = upstreamCode(errorBody);
+        error.upstreamMessage = upstreamMessage(errorBody);
         throw error;
       }
 
@@ -91,13 +146,21 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
         lastError = error;
       }
 
+      // A Retry-After beyond the wait budget means "not now" (quota exhausted for the day,
+      // hours-long ban). Clamping it and retrying anyway only burns requests, and for a
+      // quota it can extend the lockout, so stop instead of waiting a truncated interval.
+      if (lastError.retryAfterMs != null && lastError.retryAfterMs > waitBudgetMs) {
+        lastError.retryable = false;
+        lastError.retryAfterExceeded = true;
+      }
+
       const canRetry =
         attempt < maxAttempts - 1 &&
         lastError.retryable !== false &&
         (lastError.retryable === true || !lastError.status || RETRYABLE_STATUS.has(lastError.status));
       if (!canRetry) break;
 
-      const waitMs = Math.min(lastError.retryAfterMs ?? backoffMs(config, attempt), config.retryMaxWait * 1000);
+      const waitMs = lastError.retryAfterMs ?? backoffMs(config, attempt);
       debugLog(config, `retry ${attempt + 1}/${maxAttempts - 1} after ${Math.round(waitMs)}ms: ${lastError.message}`);
       await sleep(waitMs);
     }
@@ -156,14 +219,74 @@ export async function tavilyExtract(url, config) {
   }
 }
 
-export async function firecrawlScrape(url, config) {
+/** Firecrawl signals an exhausted allowance with 402, or 429 plus `reason: "credits"`. */
+export function isFirecrawlQuotaError(error) {
+  return error?.status === 402 || error?.upstreamCode === "credits";
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Firecrawl returns the page's meta tags alongside the markdown. Title, author and publish
+ * date are exactly what a source card is otherwise missing, so surface them under stable
+ * names instead of dropping the whole object.
+ */
+export function firecrawlMetadata(data) {
+  const meta = data?.data?.metadata ?? data?.metadata;
+  if (!isPlainObject(meta)) return {};
+  const out = {
+    title: firstText(meta.title, meta.ogTitle, meta["og:title"], meta["twitter:title"]),
+    description: firstText(meta.description, meta.ogDescription, meta["og:description"], meta["twitter:description"]),
+    author: firstText(meta.author, meta["article:author"], meta["twitter:creator"], meta.creator),
+    published_at: firstText(
+      meta.publishedTime,
+      meta["article:published_time"],
+      meta.datePublished,
+      meta["og:article:published_time"],
+      meta.publishedDate
+    ),
+    language: firstText(meta.language, meta["og:locale"]),
+    status: firstText(meta.statusCode),
+    source_url: firstText(meta.sourceURL, meta.url, meta["og:url"]),
+  };
+  for (const [key, value] of Object.entries(out)) {
+    if (value === undefined) delete out[key];
+  }
+  return out;
+}
+
+/**
+ * Retry policy has two layers. HTTP-level failures (5xx, transient 429, timeouts) belong to
+ * `requestJson`, which also knows when a Retry-After is too far away to bother. The loop here
+ * covers exactly one case: a 200 with empty markdown, which usually means a JS-rendered page
+ * that needed a longer `waitFor`. Definite refusals (`success: false`), malformed JSON and
+ * exhausted quota are returned at once; retrying them only spends requests and credits.
+ */
+export async function firecrawlScrape(url, config, { timeoutMs = 90_000 } = {}) {
   const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/scrape`;
   const authMode = firecrawlAuthMode(config);
-  let lastError = "Firecrawl Scrape 返回空内容";
+  const startedAt = Date.now();
+  const stats = { requests: 0 };
+  const fail = (error, extra = {}) => ({
+    ok: false,
+    provider: "firecrawl",
+    auth_mode: authMode,
+    error,
+    requests: stats.requests,
+    duration_ms: Date.now() - startedAt,
+    ...extra,
+  });
 
   for (let attempt = 0; attempt < config.retryMaxAttempts; attempt += 1) {
+    let data;
     try {
-      const data = await requestJson(endpoint, {
+      data = await requestJson(endpoint, {
         headers: firecrawlHeaders(config),
         body: {
           url,
@@ -171,38 +294,47 @@ export async function firecrawlScrape(url, config) {
           timeout: 60_000,
           waitFor: (attempt + 1) * 1500,
         },
-        timeoutMs: 90_000,
+        timeoutMs,
         config,
-        retry: false,
+        retry: true,
+        // A 90s scrape timeout retried three times overruns the 240s command deadline; the
+        // caller then sees DEADLINE_EXCEEDED instead of the real cause.
+        retryOnTimeout: false,
+        stats,
       });
-
-      const content = data?.data?.markdown || data?.markdown || "";
-      if (content.trim()) {
-        return {
-          ok: true,
-          provider: "firecrawl",
-          auth_mode: authMode,
-          content,
-          raw: data,
-          attempts: attempt + 1,
-          ...(Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {}),
-        };
-      }
-
-      lastError = "Firecrawl Scrape 返回空内容";
-      debugLog(config, `Firecrawl empty markdown, retry ${attempt + 1}/${config.retryMaxAttempts}`);
     } catch (error) {
-      lastError = error.message;
-      if (error.status && !RETRYABLE_STATUS.has(error.status)) break;
-      debugLog(config, `Firecrawl error, retry ${attempt + 1}/${config.retryMaxAttempts}: ${error.message}`);
+      const quota = isFirecrawlQuotaError(error);
+      if (quota) {
+        await recordFirecrawlCooldown(config, { authMode, retryAfterMs: error.retryAfterMs, reason: error.upstreamCode || "quota" });
+      }
+      return fail(error.message, quota ? { quota_exhausted: true } : {});
     }
 
-    if (attempt < config.retryMaxAttempts - 1) {
-      await sleep(backoffMs(config, attempt));
+    if (data?.success === false) {
+      return fail(upstreamMessage(data) || "Firecrawl Scrape 返回 success:false");
     }
+
+    const content = data?.data?.markdown || data?.markdown || "";
+    if (content.trim()) {
+      return {
+        ok: true,
+        provider: "firecrawl",
+        auth_mode: authMode,
+        content,
+        raw: data,
+        attempts: attempt + 1,
+        requests: stats.requests,
+        duration_ms: Date.now() - startedAt,
+        metadata: firecrawlMetadata(data),
+        ...(Number.isFinite(data?.data?.metadata?.creditsUsed) ? { credits_used: data.data.metadata.creditsUsed } : {}),
+      };
+    }
+
+    debugLog(config, `Firecrawl empty markdown, retry ${attempt + 1}/${config.retryMaxAttempts}`);
+    if (attempt < config.retryMaxAttempts - 1) await sleep(backoffMs(config, attempt));
   }
 
-  return { ok: false, provider: "firecrawl", auth_mode: authMode, error: lastError };
+  return fail("Firecrawl Scrape 返回空内容");
 }
 
 function sourceFromTavily(result) {
@@ -229,11 +361,19 @@ function sourceFromFirecrawl(result) {
   };
 }
 
-export async function tavilySearch(query, limit, config) {
+function domainFilters(filters) {
+  return {
+    allowed: Array.isArray(filters?.allowedDomains) ? filters.allowedDomains.filter(Boolean) : [],
+    excluded: Array.isArray(filters?.excludedDomains) ? filters.excludedDomains.filter(Boolean) : [],
+  };
+}
+
+export async function tavilySearch(query, limit, config, filters = {}) {
   if (!config.tavilyApiKey) {
     return { ok: false, provider: "tavily", skipped: true, error: "TAVILY_API_KEY 未配置", sources: [] };
   }
 
+  const { allowed, excluded } = domainFilters(filters);
   const endpoint = `${config.tavilyApiUrl.replace(/\/+$/, "")}/search`;
   try {
     const data = await requestJson(endpoint, {
@@ -244,6 +384,10 @@ export async function tavilySearch(query, limit, config) {
         search_depth: "advanced",
         include_raw_content: false,
         include_answer: false,
+        // Tavily: include_domains (max 300) / exclude_domains (max 150); "filter" restricts
+        // results to the list, "boost" would only rank them higher.
+        ...(allowed.length ? { include_domains: allowed, include_domains_mode: "filter" } : {}),
+        ...(excluded.length ? { exclude_domains: excluded } : {}),
       },
       timeoutMs: 90_000,
       config,
@@ -256,13 +400,21 @@ export async function tavilySearch(query, limit, config) {
   }
 }
 
-export async function firecrawlSearch(query, limit, config) {
+export async function firecrawlSearch(query, limit, config, filters = {}) {
   const endpoint = `${config.firecrawlApiUrl.replace(/\/+$/, "")}/search`;
   const authMode = firecrawlAuthMode(config);
+  const { allowed, excluded } = domainFilters(filters);
   try {
     const data = await requestJson(endpoint, {
       headers: firecrawlHeaders(config),
-      body: { query, limit },
+      body: {
+        query,
+        limit,
+        // Firecrawl v2 search: includeDomains / excludeDomains are hostnames and mutually
+        // exclusive, which resolveFilterPair already guarantees upstream.
+        ...(allowed.length ? { includeDomains: allowed } : {}),
+        ...(excluded.length ? { excludeDomains: excluded } : {}),
+      },
       timeoutMs: 90_000,
       config,
       retry: true,
@@ -284,7 +436,18 @@ export async function firecrawlSearch(query, limit, config) {
       ...(Number.isFinite(data?.creditsUsed) ? { credits_used: data.creditsUsed } : {}),
     };
   } catch (error) {
-    return { ok: false, provider: "firecrawl", auth_mode: authMode, error: error.message, sources: [] };
+    const quota = isFirecrawlQuotaError(error);
+    if (quota) {
+      await recordFirecrawlCooldown(config, { authMode, retryAfterMs: error.retryAfterMs, reason: error.upstreamCode || "quota" });
+    }
+    return {
+      ok: false,
+      provider: "firecrawl",
+      auth_mode: authMode,
+      error: error.message,
+      sources: [],
+      ...(quota ? { quota_exhausted: true } : {}),
+    };
   }
 }
 
@@ -643,9 +806,31 @@ function stripHtmlToReadableText(html) {
   return body;
 }
 
-function renderDirectContent(text, contentType) {
+/**
+ * Drop exact repeats of long lines, keeping the first. X status pages render the post text
+ * three times (title, Open Graph copy, timeline card); no sane page repeats a 20+ char line
+ * verbatim on purpose.
+ */
+export function collapseRepeatedLines(text, { minLength = 20 } = {}) {
+  const seen = new Set();
+  const out = [];
+  for (const line of String(text || "").split("\n")) {
+    const key = line.trim();
+    if (key.length >= minLength) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function renderDirectContent(text, contentType, finalUrl) {
   const type = (contentType || "").toLowerCase();
-  if (type.includes("html")) return stripHtmlToReadableText(text);
+  if (type.includes("html")) {
+    const readable = stripHtmlToReadableText(text);
+    return isXUrl(finalUrl) ? collapseRepeatedLines(readable) : readable;
+  }
   if (type.includes("json")) {
     try {
       return JSON.stringify(JSON.parse(text), null, 2);
@@ -654,6 +839,55 @@ function renderDirectContent(text, contentType) {
     }
   }
   return text.trim();
+}
+
+// ISO timestamps put a 'T' right after the date, so the tail needs a lookahead, not \b.
+const X_DATE_PATTERN = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.? \d{1,2}, \d{4}\b|\b\d{4}-\d{2}-\d{2}(?!\d)/;
+// Lines the logged-out X shell adds around (or instead of) the post.
+const X_BOILERPLATE_LINE =
+  /^(?:Post|Log in|Sign up|Log in or sign up for X|See what[’']s happening and join the conversation|Continue with (?:phone|Apple|Google)|or|Log in with username or email|Relevant people|Trending now|Follow|Back|Search|Something went wrong\.?.*|Try again|Don[’']t miss what[’']s happening.*|People on X are the first to know\.?|Terms\b.*|©.*X Corp\.?|-|\d[\d.,]*[KM]?(?: Views)?|\d{1,2}:\d{2} [AP]M .*)$/i;
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Did a Direct fetch of an X status page return the post, or only the login shell? X serves
+ * server-rendered HTML to some clients and a JavaScript shell to others; the shell has the
+ * chrome but neither the author's handle, the post date, nor any post text.
+ */
+export function validateXPostContent(content, post) {
+  const text = String(content || "");
+  const missing = [];
+  const handle = post?.x_handle;
+  if (!handle || !new RegExp(`@${escapeRegExp(handle)}(?![A-Za-z0-9_])`, "i").test(text)) missing.push("handle");
+  if (!X_DATE_PATTERN.test(text)) missing.push("date");
+
+  const body = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#") && !X_BOILERPLATE_LINE.test(line) && !/^@[A-Za-z0-9_]{1,15}$/.test(line))
+    .filter((line) => !X_DATE_PATTERN.test(line) || line.length > 40);
+  if (!body.some((line) => line.length >= 20)) missing.push("text");
+
+  return { ok: missing.length === 0, missing };
+}
+
+/**
+ * Whether fetchUrl(auto) should try Direct before the paid providers for this URL. Only X
+ * status pages with a handle qualify (the handle is what the validation checks). Applies
+ * regardless of keys (decided 2026-09-08 after a side-by-side): Tavily returns the post
+ * without its date, Firecrawl bills ~30 credits and takes 10s+, Direct is free and carries
+ * the date. Callers who want the thread ask for Firecrawl explicitly.
+ */
+export function directFirstForX(url, config, provider = "auto") {
+  if (provider !== "auto") return null;
+  const post = parseXPostUrl(url);
+  return post?.x_handle && post?.x_post_id ? post : null;
+}
+
+export function xDirectFirstEligible(url, config, provider = "auto") {
+  return Boolean(directFirstForX(url, config, provider));
 }
 
 function directMetadata(response, contentLength) {
@@ -746,7 +980,7 @@ export async function directFetch(url, options = {}) {
       });
     }
 
-    const content = renderDirectContent(body.text, contentType);
+    const content = renderDirectContent(body.text, contentType, finalUrl);
     if (!content) warnings.push("Direct Fetch 返回空文本；页面可能依赖 JavaScript 渲染或无正文。");
 
     return finish({
@@ -782,11 +1016,39 @@ function summarizeFetchFailure(tried, fallback) {
 
 export async function fetchUrl(url, config, { provider = "auto" } = {}) {
   const tried = [];
+  let directFirst = null;
 
   if (provider === "direct") {
     const result = await directFetch(url);
     tried.push({ provider: result.provider, ok: result.ok, skipped: false, error: result.error });
     return { ...result, tried };
+  }
+
+  const xPost = directFirstForX(url, config, provider);
+  if (xPost) {
+    const result = await directFetch(url);
+    // X redirects /<anyhandle>/status/<id> to the post's real handle, so the page names
+    // the canonical handle, not the one in the requested URL. Validate against the former.
+    const finalPost = result.ok ? parseXPostUrl(result.final_url || url) : null;
+    const post = finalPost?.x_handle && finalPost.x_post_id === xPost.x_post_id ? finalPost : xPost;
+    const validation = result.ok ? validateXPostContent(result.content, post) : { ok: false, missing: [] };
+    if (result.ok && validation.ok) {
+      tried.push({
+        provider: "direct",
+        ok: true,
+        skipped: false,
+        x_validated: true,
+        ...(post.x_handle !== xPost.x_handle ? { x_handle: post.x_handle } : {}),
+      });
+      return { ...result, tried };
+    }
+    directFirst = result;
+    tried.push({
+      provider: "direct",
+      ok: false,
+      skipped: false,
+      error: result.ok ? `x_validation_failed: ${validation.missing.join(",")}` : result.error,
+    });
   }
 
   if (provider === "auto" || provider === "tavily") {
@@ -796,19 +1058,41 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
   }
 
   if (provider === "auto" || provider === "firecrawl") {
-    const result = await firecrawlScrape(url, config);
-    tried.push({
-      provider: result.provider,
-      ok: result.ok,
-      skipped: Boolean(result.skipped),
-      error: result.error,
-      auth_mode: result.auth_mode,
-      ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
-    });
-    if (result.ok || provider === "firecrawl") return { ...result, tried };
+    const authMode = firecrawlAuthMode(config);
+    // An explicit --provider firecrawl still makes the request: the user may have just added
+    // a key or topped up, and a success clears the stale cooldown.
+    const cooldown = provider === "auto" ? await activeFirecrawlCooldown(config, authMode) : null;
+    if (cooldown) {
+      tried.push({ provider: "firecrawl", ok: false, skipped: true, auth_mode: authMode, error: cooldownSkipMessage(cooldown) });
+    } else {
+      const result = await firecrawlScrape(url, config);
+      tried.push({
+        provider: result.provider,
+        ok: result.ok,
+        skipped: Boolean(result.skipped),
+        error: result.error,
+        auth_mode: result.auth_mode,
+        ...(result.requests == null ? {} : { requests: result.requests }),
+        ...(result.duration_ms == null ? {} : { duration_ms: result.duration_ms }),
+        ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
+      });
+      if (result.ok && provider === "firecrawl") await clearFirecrawlCooldown(config);
+      if (result.ok || provider === "firecrawl") return { ...result, tried };
+    }
   }
 
   if (provider === "auto") {
+    if (directFirst) {
+      // Direct already ran for this X post. Its page did not validate, but with nothing else
+      // available it is still better than an error; say so instead of fetching it again.
+      if (directFirst.ok) {
+        const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
+        const warning = `Direct 抓到的 X 页面未通过原帖校验（${failed?.error || "x_validation_failed"}），其他 provider 不可用，按原样返回；需要完整帖文或 thread 时用 --provider firecrawl。`;
+        tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
+        return { ...directFirst, warnings: [...(directFirst.warnings || []), warning], tried };
+      }
+      return { ...directFirst, tried, error: summarizeFetchFailure(tried, directFirst.error) };
+    }
     const result = await directFetch(url);
     tried.push({ provider: result.provider, ok: result.ok, skipped: false, error: result.error });
     if (result.ok) return { ...result, tried };

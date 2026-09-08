@@ -17,7 +17,8 @@ export const DEFAULT_MAX_SOURCES = 12;
 const DEFAULT_DEADLINE_SECONDS = 240;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
-const DEFAULT_OUTPUT_DIR = path.join(homedir(), ".cache", "grok-search", "outputs");
+const DEFAULT_STATE_DIR = path.join(homedir(), ".cache", "grok-search");
+const DEFAULT_OUTPUT_DIR = path.join(DEFAULT_STATE_DIR, "outputs");
 const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
 const DEFAULT_RESPONSES_MAX_TURNS = 3;
 const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
@@ -203,6 +204,11 @@ export async function loadConfig({ requireGrok = false } = {}) {
   const outputDir = resolveUserPath(
     envOrFile("GROK_OUTPUT_DIR", fileConfig, ["GROK_OUTPUT_DIR", "outputDir", "output_dir"], DEFAULT_OUTPUT_DIR)
   );
+  // Small cross-command state (provider cooldowns). Kept outside outputDir so the retention
+  // sweep never deletes it.
+  const stateDir = resolveUserPath(
+    envOrFile("GROK_STATE_DIR", fileConfig, ["GROK_STATE_DIR", "stateDir", "state_dir"], DEFAULT_STATE_DIR)
+  );
 
   return {
     grokApiUrl,
@@ -215,6 +221,13 @@ export async function loadConfig({ requireGrok = false } = {}) {
       ["GROK_RESPONSES_MAX_TURNS", "responsesMaxTurns", "responses_max_turns"],
       DEFAULT_RESPONSES_MAX_TURNS,
       { min: 1 }
+    ),
+    // null = not sent; the relay decides. false is a cost lever where the relay passes it through.
+    responsesParallelToolCalls: envOrFileBool(
+      "GROK_RESPONSES_PARALLEL_TOOL_CALLS",
+      fileConfig,
+      ["GROK_RESPONSES_PARALLEL_TOOL_CALLS", "responsesParallelToolCalls", "responses_parallel_tool_calls"],
+      null
     ),
     responsesReasoningEffort: envOrFile(
       "GROK_RESPONSES_REASONING_EFFORT",
@@ -301,7 +314,13 @@ export async function loadConfig({ requireGrok = false } = {}) {
       { min: 0 }
     ),
     outputDir,
+    stateDir,
     outputRetentionDays: DEFAULT_OUTPUT_RETENTION_DAYS,
+    // One JSON record per command (query, options, answer, sources, usage, errors) so a run
+    // can be replayed without a session export. `GROK_RUN_LOG=off` disables it.
+    runLog: envOrFileBool("GROK_RUN_LOG", fileConfig, ["GROK_RUN_LOG", "runLog", "run_log"], true),
+    // Also keep the raw Grok Responses body inside the run record.
+    debugRaw: envBool("GROK_DEBUG_RAW", false),
     debug: envBool("GROK_DEBUG", false),
   };
 }
