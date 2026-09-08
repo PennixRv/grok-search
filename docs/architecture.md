@@ -97,7 +97,7 @@ Direct Map 刻意保持浅层，不执行 JavaScript，并忽略自然语言过�
 - `usage`、`cost_in_usd_ticks`、`cost_usd`
 - `search_source`（`web` / `x` / `both`）
 - `responses_web_search_calls`、`responses_x_search_calls`、`responses_tool_calls`——次数取 `usage.server_side_tool_usage_details`（计费口径）与 `output[]` 里 `*_call` item 统计的逐工具较大值；两侧都有中转会漏报，任一单独取值都会报成 0。`responses_tool_calls` 摘要为 `{ total, upstream, trace, by_action, failed? }`，两侧原始计数并列可见
-- `search_budget`——prompt 里的软预算（`prompt_total: 6`，挂 X 时 `prompt_x: 4`）与实际 `used_web` / `used_x` 并列，`enforced: false`：`max_turns` 限的是 agentic turn，一个 turn 可含多次检索，预算只是给模型的建议；`max_tool_calls` 官方直连与两个中转都不生效（2026-09-08 实测，直连 `max_tool_calls: 1` 仍跑 4 次）；`parallel_tool_calls: false` 官方有效、部分中转丢弃，由 `--responses-parallel-tool-calls` 显式发送
+- `search_budget`——prompt 里的软预算（`prompt_total: 6`，挂 X 时 `prompt_x: 4`）与实际 `used_web` / `used_x` 并列，`enforced: false`：`max_turns` 限的是 agentic turn，一个 turn 可含多次检索，且只对 X 搜索是硬上限、web 搜索不受它约束，预算只是给模型的建议；`max_tool_calls` 官方直连与两个中转都不生效（2026-09-08 实测，直连 `max_tool_calls: 1` 仍跑 4 次）；`parallel_tool_calls: false` 官方有效、部分中转丢弃，由 `--responses-parallel-tool-calls` 显式发送
 - `options.extra_domain_filter`（`pushed` / `demoted` / `none`）、`options.instructions_chars`、`options.responses_parallel_tool_calls`（设置时）
 - `responses_model`——中转实际返回的模型，与请求不同时告警
 - `degraded` 与 `grok_error`（仅额度降级）

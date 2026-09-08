@@ -82,6 +82,9 @@ const CASES = [
   // max_turns is the one knob the relay is known to pass through; is 2 a usable cost lever?
   { id: "web-max-turns-2", base: WEB, extra: { max_turns: 2 } },
   { id: "x-max-turns-2", base: X, extra: { max_turns: 2 } },
+  // Does max_turns count every tool call or only search? A cap of 1 with serial turns tells them apart.
+  { id: "web-max-turns-1-serial", base: WEB, extra: { max_turns: 1, parallel_tool_calls: false } },
+  { id: "x-max-turns-1-serial", base: X, extra: { max_turns: 1, parallel_tool_calls: false } },
 ]
   .filter((c) => (only === "all" || c.id.startsWith(only)) && (!ids || ids.includes(c.id)))
   .flatMap((c) => Array.from({ length: repeat }, (_, i) => (repeat > 1 ? { ...c, id: `${c.id}#${i + 1}` } : c)));
