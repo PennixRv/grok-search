@@ -13,7 +13,8 @@ import { startDeadline } from "./lib/deadline.js";
 import { searchGrokResponses } from "./lib/grok-responses.js";
 import { cleanupOutputDir, previewText, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
 import { SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X } from "./lib/prompts.js";
-import { firecrawlAuthMode, firecrawlSearch, tavilySearch } from "./lib/providers.js";
+import { firecrawlAuthMode, firecrawlSearch } from "./lib/firecrawl.js";
+import { tavilySearch } from "./lib/tavily.js";
 import { assertProxyUsable, getProxyState } from "./lib/proxy.js";
 import { buildRawSourcesPayload, compactSources, isOffDomainExtra, mergeSources, selectSources } from "./lib/sources.js";
 

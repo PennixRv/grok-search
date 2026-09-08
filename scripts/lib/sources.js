@@ -314,3 +314,11 @@ export function buildRawSourcesPayload({
     created_at: createdAt,
   };
 }
+
+/** Normalize the allowed/excluded domain lists that search adapters push down. */
+export function domainFilters(filters) {
+  return {
+    allowed: Array.isArray(filters?.allowedDomains) ? filters.allowedDomains.filter(Boolean) : [],
+    excluded: Array.isArray(filters?.excludedDomains) ? filters.excludedDomains.filter(Boolean) : [],
+  };
+}

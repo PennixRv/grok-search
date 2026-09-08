@@ -1,4 +1,4 @@
-import { authHeaders, requestJson } from "./providers.js";
+import { authHeaders, requestJson } from "./http.js";
 import { usesWebSearch, usesXSearch } from "./config.js";
 import { getLocalTimeContext, platformPrompt } from "./context.js";
 import { searchPrompt, xSearchPrompt } from "./prompts.js";

@@ -12,7 +12,11 @@
 scripts/search.js
   ├─ lib/grok-responses.js  Responses 请求、tool trace 与 citation 解析
   ├─ lib/context.js         本地时间和 platform 上下文
-  ├─ lib/providers.js       Tavily、Firecrawl 与 direct HTTP provider（重试、X 原帖校验）
+  ├─ lib/providers.js       fetch / map 编排：provider 顺序、X 原帖 Direct 优先、失败接力；re-export 下面四个适配器
+  ├─ lib/http.js            requestJson：重试与退避、Retry-After、脱敏、代理初始化
+  ├─ lib/tavily.js          Tavily Extract / Search / Map
+  ├─ lib/firecrawl.js       Firecrawl Scrape / Search、metadata、额度判断与冷却记录
+  ├─ lib/direct.js          Direct fetch / map：HTML 转文本、X 原帖校验、sitemap 与链接解析
   ├─ lib/cooldown.js        Firecrawl 额度耗尽后的跨命令冷却状态
   ├─ lib/sources.js         信源压缩、规范化、字段合并去重、域名过滤降级
   ├─ lib/output.js          JSON、preview、完整输出与运行记录落盘

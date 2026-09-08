@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { redactSecrets } from "./providers.js";
+import { redactSecrets } from "./http.js";
 
 const OUTPUT_PREFIX = "grok-search-";
 export const RUN_RECORD_SCHEMA_VERSION = 2;
