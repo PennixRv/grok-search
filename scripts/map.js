@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
-import { cleanupOutputDir, printJson } from "./lib/output.js";
+import { cleanupOutputDir, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
 import { mapUrl } from "./lib/providers.js";
 import { assertProxyUsable } from "./lib/proxy.js";
 
@@ -173,29 +173,51 @@ function errorOutput(error, code) {
   };
 }
 
+function runRecord(config, args, output) {
+  return {
+    ...runRecordBase("map", config, output.diagnostics.mapped_at),
+    url: args?.url ?? null,
+    base_url: output.base_url ?? null,
+    options: output.diagnostics.options ?? null,
+    provider: output.diagnostics.provider ?? null,
+    urls: output.urls ?? null,
+    provider_attempts: output.diagnostics.provider_attempts,
+    warnings: output.diagnostics.warnings,
+    diagnostics: output.diagnostics,
+    error: output.error ?? null,
+  };
+}
+
 let stage = "argument";
+let args = null;
+let config = null;
 try {
-  const args = parseArgs(process.argv.slice(2));
+  args = parseArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
     process.exit(0);
   }
 
   stage = "config";
-  const config = await loadConfig({ requireGrok: false });
+  config = await loadConfig({ requireGrok: false });
   assertProxyUsable();
   await cleanupOutputDir(config);
   stage = "map";
   const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
   const stopDeadline = startDeadline(deadlineSeconds, () => {
     const error = new Error(`映射总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
-    printJson(errorOutput(error, "DEADLINE_EXCEEDED"));
+    const output = errorOutput(error, "DEADLINE_EXCEEDED");
+    const runPath = writeRunRecordSync(config, { kind: "map", label: args.url, record: runRecord(config, args, output) });
+    if (runPath) output.diagnostics.run_path = runPath;
+    printJson(output);
     console.error(error.message);
     process.exit(1);
   });
   try {
     const result = await mapUrl(args.url, config, args);
     const output = publicResult(args, result);
+    const runPath = await writeRunRecord(config, { kind: "map", label: args.url, record: runRecord(config, args, output) });
+    if (runPath) output.diagnostics.run_path = runPath;
     printJson(output);
     if (output.error) {
       console.error(output.error.message);
@@ -206,7 +228,12 @@ try {
   }
 } catch (error) {
   const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "map" ? "MAP_ERROR" : "RUNTIME_ERROR");
-  printJson(errorOutput(error, code));
+  const output = errorOutput(error, code);
+  if (config) {
+    const runPath = await writeRunRecord(config, { kind: "map", label: args?.url || "error", record: runRecord(config, args, output) });
+    if (runPath) output.diagnostics.run_path = runPath;
+  }
+  printJson(output);
   console.error(error.message);
   process.exitCode = stage === "argument" ? 2 : 1;
 }

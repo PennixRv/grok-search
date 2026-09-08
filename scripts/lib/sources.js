@@ -86,8 +86,70 @@ export function normalizeSourceUrl(url) {
   }
 }
 
+function textField(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+/**
+ * Grok's url_citation annotations carry the inline marker ("1", "[2]") as their title. It
+ * says nothing about the page, so any real title must be allowed to replace it.
+ */
+export function isCitationMarker(title) {
+  return /^\[?\d+\]?$/.test(String(title || "").trim());
+}
+
+function hasUsableTitle(source) {
+  const title = textField(source?.title);
+  return Boolean(title) && !isCitationMarker(title);
+}
+
+function sourceSnippet(source) {
+  return textField(source?.snippet) || textField(source?.description) || textField(source?.content);
+}
+
+/**
+ * Fill what the first record of a URL lacks from a later duplicate. A Grok citation arrives
+ * as a bare URL with a marker title; the same page found by Tavily or Firecrawl has a title
+ * and a description. Dropping the duplicate threw both away.
+ */
+function mergeSourceFields(existing, incoming) {
+  const out = { ...existing };
+  let merged = false;
+
+  if (!hasUsableTitle(out) && hasUsableTitle(incoming)) {
+    out.title = textField(incoming.title);
+    merged = true;
+  }
+  if (!sourceSnippet(out) && sourceSnippet(incoming)) {
+    out.snippet = sourceSnippet(incoming);
+    merged = true;
+  }
+  for (const key of ["published_date", "x_handle", "x_post_id"]) {
+    if (!textField(out[key]) && textField(incoming[key])) {
+      out[key] = textField(incoming[key]);
+      merged = true;
+    }
+  }
+  if (!Number.isFinite(out.score) && Number.isFinite(incoming.score)) {
+    out.score = incoming.score;
+    merged = true;
+  }
+  if (incoming.opened === true && out.opened !== true) {
+    out.opened = true;
+    merged = true;
+  }
+
+  if (merged) {
+    const provider = textField(incoming.provider);
+    if (provider && provider !== textField(out.provider)) {
+      out.merged_from = [...new Set([...(out.merged_from || []), provider])];
+    }
+  }
+  return out;
+}
+
 export function mergeSources(...sourceLists) {
-  const seen = new Set();
+  const indexByKey = new Map();
   const merged = [];
 
   for (const sources of sourceLists) {
@@ -95,21 +157,17 @@ export function mergeSources(...sourceLists) {
       const url = typeof item?.url === "string" ? item.url.trim() : "";
       if (!url) continue;
       const key = normalizeSourceUrl(url);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push({ ...item, url });
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex == null) {
+        indexByKey.set(key, merged.length);
+        merged.push({ ...item, url });
+        continue;
+      }
+      merged[existingIndex] = mergeSourceFields(merged[existingIndex], item);
     }
   }
 
   return merged;
-}
-
-function textField(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
-function sourceSnippet(source) {
-  return textField(source?.snippet) || textField(source?.description) || textField(source?.content);
 }
 
 function clipText(value, maxChars) {
@@ -135,6 +193,8 @@ export function compactSource(source, { sourceChars = 400 } = {}) {
   const sourceType = textField(source?.source_type);
   if (sourceType) out.source_type = sourceType;
 
+  if (source?.opened === true) out.opened = true;
+
   const tool = textField(source?.tool);
   if (tool) out.tool = tool;
 
@@ -152,6 +212,8 @@ export function compactSource(source, { sourceChars = 400 } = {}) {
   const publishedDate = textField(source?.published_date);
   if (publishedDate) out.published_date = publishedDate;
 
+  if (Array.isArray(source?.merged_from) && source.merged_from.length) out.merged_from = [...source.merged_from];
+
   return out;
 }
 
@@ -159,22 +221,66 @@ export function compactSources(sources, options = {}) {
   return (sources || []).map((source) => compactSource(source, options)).filter(Boolean);
 }
 
-function sourceRank(source) {
-  const type = textField(source?.source_type);
-  if (type === "citation") return 0;
-  if (type === "searched") return 2;
-  return 1;
+export function hostMatchesDomain(host, domain) {
+  const h = String(host || "").toLowerCase();
+  const d = String(domain || "")
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/^\*\./, "");
+  if (!h || !d) return false;
+  return h === d || h.endsWith(`.${d}`);
 }
 
-export function selectSources(sources, { maxSources } = {}) {
+export function urlInDomains(url, domains) {
+  if (!Array.isArray(domains) || !domains.length) return false;
+  let host;
+  try {
+    host = new URL(trimUrl(String(url || "").trim())).hostname;
+  } catch {
+    return false;
+  }
+  return domains.some((domain) => hostMatchesDomain(host, domain));
+}
+
+function isExtraSource(source) {
+  return !textField(source?.source_type);
+}
+
+/**
+ * An extra-provider result that falls outside the domain filters the caller gave Grok. The
+ * providers get the same filters, so these only appear when one of them leaks; they are
+ * kept but ranked last so they cannot displace in-scope candidates.
+ */
+export function isOffDomainExtra(source, { allowedDomains = [], excludedDomains = [] } = {}) {
+  if (!isExtraSource(source)) return false;
+  if (allowedDomains.length && !urlInDomains(source?.url, allowedDomains)) return true;
+  if (excludedDomains.length && urlInDomains(source?.url, excludedDomains)) return true;
+  return false;
+}
+
+/**
+ * Ranking for the visible cards: cited > opened by Grok > extra providers > merely listed by
+ * a search > extra results outside the requested domains.
+ */
+function sourceRank(source, filters) {
+  const type = textField(source?.source_type);
+  if (type === "citation") return 0;
+  if (source?.opened === true) return 1;
+  if (type === "searched") return 3;
+  return isOffDomainExtra(source, filters) ? 4 : 2;
+}
+
+export function selectSources(sources, { maxSources, allowedDomains = [], excludedDomains = [] } = {}) {
   const list = sources || [];
   const total = list.length;
   const limit = Number.isFinite(maxSources) && maxSources > 0 ? maxSources : total;
+  const filters = { allowedDomains, excludedDomains };
 
   let items = list;
   if (total > limit) {
     items = list
-      .map((source, index) => ({ source, index, rank: sourceRank(source) }))
+      .map((source, index) => ({ source, index, rank: sourceRank(source, filters) }))
       .sort((a, b) => a.rank - b.rank || a.index - b.index)
       .slice(0, limit)
       .sort((a, b) => a.index - b.index)
@@ -182,39 +288,6 @@ export function selectSources(sources, { maxSources } = {}) {
   }
 
   return { items, total, returned: items.length, omitted: total - items.length };
-}
-
-export function hasRawSourceValue(source, compacted = compactSource(source)) {
-  if (!source || !compacted) return false;
-
-  for (const [key, value] of Object.entries(source)) {
-    if (value == null) continue;
-
-    if (key === "provider" && textField(value) === compacted.provider) continue;
-    if (key === "url" && trimUrl(String(value).trim()) === compacted.url) continue;
-    if (key === "title" && textField(value) === compacted.title) continue;
-    if (key === "source_type" && textField(value) === compacted.source_type) continue;
-    if (key === "tool" && textField(value) === compacted.tool) continue;
-    if (key === "x_handle" && textField(value) === compacted.x_handle) continue;
-    if (key === "x_post_id" && textField(value) === compacted.x_post_id) continue;
-    if (key === "score" && Number.isFinite(value) && value === compacted.score) continue;
-    if (key === "published_date" && textField(value) === compacted.published_date) continue;
-
-    if (key === "snippet" || key === "description" || key === "content") {
-      const rawText = textField(value);
-      if (!rawText) continue;
-      if (compacted.snippet === rawText) continue;
-      return true;
-    }
-
-    return true;
-  }
-
-  return false;
-}
-
-export function hasRawSourceValues(rawSources, compactedSources) {
-  return (rawSources || []).some((source, index) => hasRawSourceValue(source, compactedSources?.[index]));
 }
 
 export function buildRawSourcesPayload({
@@ -241,4 +314,3 @@ export function buildRawSourcesPayload({
     created_at: createdAt,
   };
 }
-

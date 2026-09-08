@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { compactSource, hasRawSourceValue, mergeSources, parseXPostUrl, selectSources } from "../scripts/lib/sources.js";
+import {
+  compactSource,
+  hostMatchesDomain,
+  isCitationMarker,
+  isOffDomainExtra,
+  mergeSources,
+  parseXPostUrl,
+  selectSources,
+} from "../scripts/lib/sources.js";
 
 assert.deepEqual(parseXPostUrl("https://x.com/xai/status/1975607901571199086"), {
   x_handle: "xai",
@@ -34,20 +42,60 @@ assert.deepEqual(xCompacted, {
   x_handle: "xai",
   x_post_id: "123",
 });
-// X fields survive compaction, so they must not force a raw-sources dump.
-assert.equal(
-  hasRawSourceValue(
-    { provider: "grok-responses", url: "https://x.com/xai/status/123", title: "@xai", x_handle: "xai", x_post_id: "123" },
-    xCompacted
-  ),
-  false
-);
 
 assert.deepEqual(
   mergeSources([{ url: "https://A.example/path/" }], [{ url: "https://a.example/path#section" }, { url: "https://b.example/" }]).map(
     (source) => source.url
   ),
   ["https://A.example/path/", "https://b.example/"]
+);
+
+// A duplicate URL fills in what the first record lacks: a marker title gives way to a real
+// one, the description becomes the snippet, and the contributing provider is recorded.
+const mergedCitation = mergeSources(
+  [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/post", title: "1" }],
+  [{ provider: "firecrawl", url: "https://example.com/post/", title: "Great Post Title", description: "A useful description", score: 0.5 }]
+);
+assert.deepEqual(mergedCitation, [
+  {
+    provider: "grok-responses",
+    source_type: "citation",
+    url: "https://example.com/post",
+    title: "Great Post Title",
+    snippet: "A useful description",
+    score: 0.5,
+    merged_from: ["firecrawl"],
+  },
+]);
+// Existing real values are never overwritten, and an identical duplicate leaves no trace.
+const keptTitle = mergeSources(
+  [{ provider: "grok-responses", url: "https://example.com/a", title: "Original", snippet: "kept" }],
+  [{ provider: "tavily", url: "https://example.com/a", title: "Other", description: "ignored" }]
+);
+assert.equal(keptTitle[0].title, "Original");
+assert.equal(keptTitle[0].snippet, "kept");
+assert.equal(Object.hasOwn(keptTitle[0], "merged_from"), false);
+assert.equal(isCitationMarker("1"), true);
+assert.equal(isCitationMarker("[12]"), true);
+assert.equal(isCitationMarker("Issue #12"), false);
+
+// Domain matching is by host suffix; extras outside the requested domains are recognised,
+// Grok's own sources never are (its filter is applied server-side).
+assert.equal(hostMatchesDomain("gist.github.com", "github.com"), true);
+assert.equal(hostMatchesDomain("github.com", "github.com"), true);
+assert.equal(hostMatchesDomain("notgithub.com", "github.com"), false);
+assert.equal(hostMatchesDomain("raw.githubusercontent.com", "github.com"), false);
+const filters = { allowedDomains: ["github.com"], excludedDomains: [] };
+assert.equal(isOffDomainExtra({ provider: "firecrawl", url: "https://medium.com/p" }, filters), true);
+assert.equal(isOffDomainExtra({ provider: "firecrawl", url: "https://github.com/o/r" }, filters), false);
+assert.equal(isOffDomainExtra({ provider: "grok-responses", source_type: "searched", url: "https://medium.com/p" }, filters), false);
+assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://reddit.com/r/x" }, { allowedDomains: [], excludedDomains: ["reddit.com"] }), true);
+assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://medium.com/p" }, { allowedDomains: [], excludedDomains: [] }), false);
+
+// compactSource carries the new flags through.
+assert.deepEqual(
+  compactSource({ provider: "grok-responses", url: "https://example.com/o", source_type: "searched", opened: true, merged_from: ["tavily"] }),
+  { provider: "grok-responses", url: "https://example.com/o", source_type: "searched", opened: true, merged_from: ["tavily"] }
 );
 
 const compacted = compactSource(
@@ -72,14 +120,9 @@ assert.deepEqual(compacted, {
 });
 assert.equal(Object.hasOwn(compacted, "description"), false);
 assert.equal(Object.hasOwn(compacted, "content"), false);
-assert.equal(hasRawSourceValue({ provider: "tavily", url: "https://example.com/a", description: "abcdefghijklmnopqrstuvwxyz" }, compacted), true);
 
 const noSnippet = compactSource({ provider: "grok", url: "https://example.com/b", description: "hidden" }, { sourceChars: 0 });
 assert.deepEqual(noSnippet, { provider: "grok", url: "https://example.com/b" });
-assert.equal(hasRawSourceValue({ provider: "grok", url: "https://example.com/b", description: "hidden" }, noSnippet), true);
-
-const fullSnippet = compactSource({ provider: "grok", url: "https://example.com/c", snippet: "short" }, { sourceChars: 400 });
-assert.equal(hasRawSourceValue({ provider: "grok", url: "https://example.com/c", snippet: "short" }, fullSnippet), false);
 
 const rankedSources = [
   { url: "https://e.example/1", source_type: "searched" },
@@ -102,5 +145,32 @@ const uncapped = selectSources(rankedSources, { maxSources: 10 });
 assert.equal(uncapped.returned, 4);
 assert.equal(uncapped.omitted, 0);
 assert.deepEqual(selectSources([], { maxSources: 5 }), { items: [], total: 0, returned: 0, omitted: 0 });
+
+// Full ranking: citation > opened > in-domain extra > searched > off-domain extra.
+const domainRanked = [
+  { url: "https://medium.com/off", provider: "firecrawl" },
+  { url: "https://github.com/searched", source_type: "searched" },
+  { url: "https://github.com/opened", source_type: "searched", opened: true },
+  { url: "https://gist.github.com/extra", provider: "tavily" },
+  { url: "https://github.com/cited", source_type: "citation" },
+];
+const domainFilters = { allowedDomains: ["github.com"], excludedDomains: [] };
+assert.deepEqual(
+  selectSources(domainRanked, { maxSources: 1, ...domainFilters }).items.map((source) => source.url),
+  ["https://github.com/cited"]
+);
+assert.deepEqual(
+  selectSources(domainRanked, { maxSources: 2, ...domainFilters }).items.map((source) => source.url),
+  ["https://github.com/opened", "https://github.com/cited"]
+);
+assert.deepEqual(
+  selectSources(domainRanked, { maxSources: 4, ...domainFilters }).items.map((source) => source.url),
+  ["https://github.com/searched", "https://github.com/opened", "https://gist.github.com/extra", "https://github.com/cited"]
+);
+// Without filters the extra keeps its place ahead of searched-only sources.
+assert.deepEqual(
+  selectSources(domainRanked, { maxSources: 4 }).items.map((source) => source.url),
+  ["https://medium.com/off", "https://github.com/opened", "https://gist.github.com/extra", "https://github.com/cited"]
+);
 
 console.log("sources fixtures ok");

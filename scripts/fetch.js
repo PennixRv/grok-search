@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
-import { cleanupOutputDir, previewText, printJson } from "./lib/output.js";
+import { cleanupOutputDir, previewText, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
 import { fetchUrl } from "./lib/providers.js";
 import { assertProxyUsable } from "./lib/proxy.js";
 
@@ -94,9 +94,18 @@ function parseArgs(argv) {
   return { url: parsed.toString(), provider, maxChars, deadline };
 }
 
+// Firecrawl bills ordinary pages at 1 credit; X posts and other JS-heavy pages cost ~30, and
+// the keyless tier only has a few dozen per day. Worth a line so the agent can budget.
+const HIGH_CREDITS_THRESHOLD = 10;
+
 async function publicResult(args, result, config) {
   const ok = Boolean(result.ok);
   const warnings = [...(result.warnings || [])];
+  if (Number.isFinite(result.credits_used) && result.credits_used >= HIGH_CREDITS_THRESHOLD) {
+    warnings.push(
+      `Firecrawl 本次消耗 ${result.credits_used} credits（普通页面 1 credit）；keyless 免费档几次这样的抓取就会耗尽当日额度，X 原帖优先考虑 Direct。`
+    );
+  }
   const fetchedAt = new Date().toISOString();
   const diagnostics = {
     provider: result.provider,
@@ -164,29 +173,58 @@ function errorOutput(error, code) {
   };
 }
 
+/** Durable copy of this fetch: full text (not the preview), metadata, every provider tried. */
+function runRecord(config, args, output, result) {
+  return {
+    ...runRecordBase("fetch", config, output.diagnostics.fetched_at),
+    url: args?.url ?? null,
+    final_url: output.final_url ?? null,
+    redirected: Boolean(output.redirected),
+    options: output.diagnostics.options ?? null,
+    provider: output.diagnostics.provider ?? null,
+    metadata: output.metadata ?? {},
+    content: result?.ok ? result.content || "" : null,
+    provider_attempts: output.diagnostics.provider_attempts,
+    warnings: output.diagnostics.warnings,
+    diagnostics: output.diagnostics,
+    error: output.error ?? null,
+  };
+}
+
 let stage = "argument";
+let args = null;
+let config = null;
 try {
-  const args = parseArgs(process.argv.slice(2));
+  args = parseArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
     process.exit(0);
   }
 
   stage = "config";
-  const config = await loadConfig({ requireGrok: false });
+  config = await loadConfig({ requireGrok: false });
   assertProxyUsable();
   await cleanupOutputDir(config);
   stage = "fetch";
   const deadlineSeconds = args.deadline ?? config.deadlineSeconds;
   const stopDeadline = startDeadline(deadlineSeconds, () => {
     const error = new Error(`提取总耗时超过 deadline（>${deadlineSeconds}s），已中止`);
-    printJson(errorOutput(error, "DEADLINE_EXCEEDED"));
+    const output = errorOutput(error, "DEADLINE_EXCEEDED");
+    const runPath = writeRunRecordSync(config, { kind: "fetch", label: args.url, record: runRecord(config, args, output, null) });
+    if (runPath) output.diagnostics.run_path = runPath;
+    printJson(output);
     console.error(error.message);
     process.exit(1);
   });
   try {
     const result = await fetchUrl(args.url, config, { provider: args.provider });
     const output = await publicResult(args, result, config);
+    const runPath = await writeRunRecord(config, {
+      kind: "fetch",
+      label: result.final_url || args.url,
+      record: runRecord(config, args, output, result),
+    });
+    if (runPath) output.diagnostics.run_path = runPath;
 
     printJson(output);
     if (output.error) {
@@ -198,7 +236,12 @@ try {
   }
 } catch (error) {
   const code = error.code || (stage === "argument" ? "ARGUMENT_ERROR" : stage === "fetch" ? "FETCH_ERROR" : "RUNTIME_ERROR");
-  printJson(errorOutput(error, code));
+  const output = errorOutput(error, code);
+  if (config) {
+    const runPath = await writeRunRecord(config, { kind: "fetch", label: args?.url || "error", record: runRecord(config, args, output, null) });
+    if (runPath) output.diagnostics.run_path = runPath;
+  }
+  printJson(output);
   console.error(error.message);
   if (stage === "argument") console.error(usage());
   process.exitCode = stage === "argument" ? 2 : 1;
