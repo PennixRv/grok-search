@@ -1,30 +1,46 @@
 ---
 name: grok-search
 description: Use when the user explicitly asks to search the web, check latest/current facts, fetch a URL, or discover pages on a website. Do not use for local code search or stable offline knowledge unless the user asks for live web access.
+metadata:
+  short-description: Grok-first web retrieval with explicit independent sources
 ---
 
 # Grok Search
 
-Node scripts for web search, URL fetch and site mapping. Run `npm install` once. Run scripts from the grok-search root (the directory of this SKILL.md): `cd` there or use absolute paths.
+Use the `grok-search` executable from the grok-search root (the directory of this SKILL.md), or use its absolute path. The Pennix installer installs the local production dependency; do not run global `npm` installs or create a provider wrapper.
 
-## Choose The Script
+## Choose The Command
 
-- URL given → `scripts/fetch.js`.
-- Site named, URL unknown → `scripts/map.js`, then `fetch.js` on the URLs you pick.
-- Current/latest information, or URL unknown → `scripts/search.js`.
-- Question about the user's local machine → inspect local files first; search only to interpret them.
+- URL given → `grok-search fetch URL`.
+- Site named, URL unknown → `grok-search map URL`, then `grok-search fetch` on
+  the URLs you pick.
+- Current/latest information, or URL unknown → `grok-search search`.
+- Local repository or machine question → use the host's local inspection and
+  approved code-search tools; use this Skill only for external facts or to
+  interpret a local result.
 
 Run the fewest commands that answer the question; run independent sub-questions in parallel. Do not chain map → fetch → search.
+
+All commands emit one JSON object. Check `error`, `diagnostics.provider_attempts`,
+and the returned source URLs before using external facts. `degraded: true`
+means the answer is raw extra-provider output after an explicit Grok failure,
+not a Grok synthesis. Follow the host workflow's routing policy for provider
+fallbacks and local-first decisions.
+
+The user configures `GROK_API_URL`, `GROK_API_KEY`, and provider/model settings
+outside this Skill. Never read, print, commit, or copy those values. Read
+[UPSTREAM.md](UPSTREAM.md) before updating the forked code; read
+`references/planning.md` only for multi-part research.
 
 ## Commands
 
 ```bash
-./scripts/search.js "plain keywords"
-./scripts/search.js --instructions "what to return, language, what to leave out" "plain keywords"
-./scripts/search.js --responses-allowed-domains github.com "plain keywords"
-./scripts/search.js --source x --x-from-date 2026-07-01 "what people say about ..."
-./scripts/fetch.js https://example.com        # --max-chars 50000 only for a deliberate deep read
-./scripts/map.js https://docs.example.com --limit 20
+./bin/grok-search search "plain keywords"
+./bin/grok-search search --instructions "what to return, language, what to leave out" "plain keywords"
+./bin/grok-search search --responses-allowed-domains github.com "plain keywords"
+./bin/grok-search search --source x --x-from-date 2026-07-01 "what people say about ..."
+./bin/grok-search fetch https://example.com        # --max-chars 50000 only for a deliberate deep read
+./bin/grok-search map https://docs.example.com --limit 20
 ```
 
 Query rules:

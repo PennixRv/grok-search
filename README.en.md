@@ -4,7 +4,7 @@
 
 `grok-search` is a general-purpose AI agent skill / script bundle that provides three web access capabilities through small Node.js scripts:
 
-- **Search**: use the Responses API with Grok / OpenRouter / Responses-compatible endpoints, plus independent Tavily / Firecrawl sources in parallel.
+- **Search**: use the Responses API with Grok / OpenRouter / Responses-compatible endpoints; fetch independent Tavily / Firecrawl sources sequentially only when explicitly requested.
 - **Fetch**: fetch readable content from a concrete URL, preferring Tavily / Firecrawl and falling back to keyless Direct Fetch.
 - **Map**: discover candidate URLs on a website, preferring Tavily Map and falling back to lightweight Direct Map.
 
@@ -16,28 +16,28 @@
 
 ## Quick Start
 
-Install dependencies once, then run scripts from the project root:
+Install dependencies once, then use the unified entrypoint from the project root:
 
 ```bash
 npm install
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+./bin/grok-search search "latest Node.js LTS"
+./bin/grok-search fetch https://example.com
+./bin/grok-search map https://docs.example.com --limit 20
 ```
 
 ## Use With pi (Example)
 
 Clone or copy this directory into your pi skills location, then enable the skill through `SKILL.md`.
 
-The commands are still direct script invocations:
+The commands use the unified entrypoint:
 
 ```bash
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+./bin/grok-search search "latest Node.js LTS"
+./bin/grok-search fetch https://example.com
+./bin/grok-search map https://docs.example.com --limit 20
 ```
 
-Other agent harnesses can use the same pattern: read `SKILL.md`, then run `scripts/search.js`, `scripts/fetch.js`, or `scripts/map.js` when needed.
+Other agent harnesses can use the same pattern: read `SKILL.md`, then run `bin/grok-search search`, `bin/grok-search fetch`, or `bin/grok-search map` when needed.
 
 ## Documentation
 
@@ -80,7 +80,7 @@ Full configuration example:
   "responsesAllowedXHandles": [],
   "responsesExcludedXHandles": [],
   "responsesOpenRouterEngine": "auto",
-  "defaultExtra": 6,
+  "defaultExtra": 0,
   "sourceChars": 400,
   "tavilyApiKey": "",
   "tavilyApiUrl": "https://api.tavily.com",
@@ -173,7 +173,7 @@ Supported variables:
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | No | Responses | Analyze images inside X posts; billed as extra tokens. Default: `false`. |
 | `GROK_X_VIDEO_UNDERSTANDING` | `xVideoUnderstanding` | No | Responses | Analyze videos inside X posts; billed as extra tokens. Default: `false`. |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | No | OpenRouter Responses | `auto`, `native`, `exa`, `firecrawl`, `parallel`, or `perplexity`. Default: `auto`. |
-| `GROK_DEFAULT_EXTRA` | `defaultExtra` | No | `search.js` | Combined Tavily/Firecrawl source target. Default: `6`. |
+| `GROK_DEFAULT_EXTRA` | `defaultExtra` | No | `search` | Combined Tavily/Firecrawl source target. Default: `0`; pass `--extra N` explicitly when needed. |
 | `GROK_SOURCE_CHARS` | `sourceChars` | No | `search.js` | Per-source stdout snippet limit. Default: `400`; `0` omits snippets. |
 | `GROK_MAX_SOURCES` | `maxSources` | No | `search.js` | Cap on source cards returned on stdout. Default: `12`; the untruncated list is stored at `sources.raw_path`. |
 | `GROK_DEADLINE_SECONDS` | `deadlineSeconds` | No | all scripts | Whole-command deadline in seconds. Default: `240`, `0` disables; on expiry the command prints a `DEADLINE_EXCEEDED` JSON envelope before exiting. |
@@ -214,18 +214,18 @@ On success, provider attempts, warnings, timestamps, and command options live un
 ## Search
 
 ```bash
-./scripts/search.js "What changed in the latest Node.js LTS?"
-./scripts/search.js --instructions "Quote the official changelog with dates; say so if not found" "node lts changelog"
-./scripts/search.js --platform GitHub "pi coding agent search skill"
-./scripts/search.js --responses-allowed-domains github.com "pi coding agent search skill"
-./scripts/search.js --extra 10 "latest pi coding agent docs"
-./scripts/search.js --no-extra "query"
-./scripts/search.js --source-chars 200 "query"
-./scripts/search.js --max-sources 8 "query"
-./scripts/search.js --deadline 120 "query"
-./scripts/search.js --full-sources "debug provider raw"
-./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --source x --responses-parallel-tool-calls false "query"   # one tool call per turn, cheaper
+./bin/grok-search search "What changed in the latest Node.js LTS?"
+./bin/grok-search search --instructions "Quote the official changelog with dates; say so if not found" "node lts changelog"
+./bin/grok-search search --platform GitHub "pi coding agent search skill"
+./bin/grok-search search --responses-allowed-domains github.com "pi coding agent search skill"
+./bin/grok-search search --extra 10 "latest pi coding agent docs"
+./bin/grok-search search --no-extra "query"
+./bin/grok-search search --source-chars 200 "query"
+./bin/grok-search search --max-sources 8 "query"
+./bin/grok-search search --deadline 120 "query"
+./bin/grok-search search --full-sources "debug provider raw"
+./bin/grok-search search --responses-openrouter-engine exa "strict web-only query"
+./bin/grok-search search --source x --responses-parallel-tool-calls false "query"   # one tool call per turn, cheaper
 ```
 
 `--instructions TEXT` separates "what to return" from "what to search". The query is the keyword string Tavily and Firecrawl search verbatim; the instructions are appended to the user message sent to Grok only (the system-prompt prefix is unchanged, so prompt caching is unaffected). With instructions present the query gets a `# Search query` header, otherwise a short query can be read as a stray line of the time context (Grok answered "no topic was specified" in a 2026-09-08 test). `diagnostics.options.instructions_chars` records the length and the run record stores the text; there is no config default.
@@ -237,11 +237,11 @@ On success, provider attempts, warnings, timestamps, and command options live un
 `--source` selects which Grok server-side tools are attached. The default is `web`:
 
 ```bash
-./scripts/search.js --source x "what is X saying about grok-4.6"   # X only
-./scripts/search.js --source both "reaction to the grok-4.6 release" # Grok routes
-./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
-./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
-./scripts/search.js --source x --x-images "query"                  # analyze post images
+./bin/grok-search search --source x "what is X saying about grok-4.6"   # X only
+./bin/grok-search search --source both "reaction to the grok-4.6 release" # Grok routes
+./bin/grok-search search --source x --responses-allowed-x-handles xai,OpenAI "query"
+./bin/grok-search search --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./bin/grok-search search --source x --x-images "query"                  # analyze post images
 ```
 
 - `x_search` supports handle allow/deny lists (mutually exclusive, max 20 each), `--x-from-date` / `--x-to-date` (`YYYY-MM-DD`), and `--x-images` / `--x-videos` (off by default, billed as extra tokens; `--no-x-images` / `--no-x-videos` turn off what the config enabled).
@@ -277,9 +277,9 @@ Post text and dates are not in the card; `answer.text` attributes each X claim b
 - `diagnostics.responses_model`: the model the relay actually served; a warning is added when it differs from the requested one (on 2026-09-08 one relay answered every `grok-4.5` request with `grok-4.5-build`, at two to three times the tool calls and cost)
 - `diagnostics.grok_endpoint`, `diagnostics.usage` / `diagnostics.cost_usd` when supplied by the provider, `diagnostics.responses_*` (`responses_tool_calls` is a `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` summary; the full list lives in `raw_path`), `diagnostics.search_budget` (the prompt's advisory budget next to the calls actually made, `enforced: false`), `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.options`, `diagnostics.duration_ms`, and `diagnostics.searched_at`
 
-By default the command starts Grok Responses, Tavily Search when configured, and Firecrawl Search in parallel. Tavily and Firecrawl remain independent evidence channels and are never injected into Grok input.
+By default the command starts Grok Responses only. With an explicit `--extra N`, Tavily and Firecrawl run sequentially after Grok completes. They remain independent evidence channels and are never injected into Grok input.
 
-`--extra N` is the combined Tavily/Firecrawl target, defaulting to `6`. Both providers split the target evenly, with odd counts favoring Tavily. Without a Tavily key, Firecrawl Keyless receives the full target. `--no-extra` strictly disables both external search channels.
+`--extra N` is the combined Tavily/Firecrawl target, defaulting to `0`. Both providers split the target evenly, with odd counts favoring Tavily. Without a Tavily key, Firecrawl Keyless receives the full target. `--no-extra` strictly disables both external search channels.
 
 When Grok explicitly reports exhausted quota (402, a quota error code, or a 429 whose body mentions quota / credits / billing) and extra sources are available, the command returns a degraded success with `diagnostics.degraded: true` and `grok_error.code: QUOTA_EXHAUSTED`. A plain 429 degrades the same way with `RATE_LIMITED`. The visible answer states that it contains raw Tavily/Firecrawl results, while `diagnostics.grok_error` preserves the redacted upstream error. Authentication, protocol, and generic service failures do not trigger this fallback.
 
@@ -294,14 +294,14 @@ Source cards intentionally do not include long `description` or `content` fields
 ## Fetch
 
 ```bash
-./scripts/fetch.js https://example.com
-./scripts/fetch.js --provider direct https://example.com
+./bin/grok-search fetch https://example.com
+./bin/grok-search fetch --provider direct https://example.com
 ```
 
 Default fetch output is a 12,000-character preview. Use `--max-chars 50000` only for an explicit deep read after the preview is useful.
 
 ```bash
-./scripts/fetch.js --max-chars 50000 https://example.com
+./bin/grok-search fetch --max-chars 50000 https://example.com
 ```
 
 Provider order for `--provider auto`:
@@ -323,9 +323,9 @@ Successful fetch output uses `content.text`, `content.chars`, `content.original_
 ## Map
 
 ```bash
-./scripts/map.js https://docs.example.com --limit 20
-./scripts/map.js --provider direct https://docs.example.com
-./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+./bin/grok-search map https://docs.example.com --limit 20
+./bin/grok-search map --provider direct https://docs.example.com
+./bin/grok-search map https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 Provider order for `--provider auto`:
@@ -364,8 +364,8 @@ Read these paths only when the preview is not enough:
 No key required:
 
 ```bash
-./scripts/fetch.js --provider direct https://example.com
-./scripts/map.js --provider direct https://example.com --limit 5
+./bin/grok-search fetch --provider direct https://example.com
+./bin/grok-search map --provider direct https://example.com --limit 5
 node tests/sources.test.js
 node tests/proxy.test.js
 node tests/responses.test.js
@@ -380,7 +380,7 @@ Search requires Grok configuration:
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-./scripts/search.js "What changed in the latest Node.js LTS?"
+./bin/grok-search search "What changed in the latest Node.js LTS?"
 ```
 
 ## Common Errors

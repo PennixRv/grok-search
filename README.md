@@ -4,7 +4,7 @@
 
 `grok-search` 是一个通用 AI agent skill / 脚本包，用轻量 Node.js 脚本提供三类网络访问能力：
 
-- **Search**：通过 Responses API 调用 Grok / OpenRouter / Responses-compatible 接口，并行返回 Tavily / Firecrawl 独立信源。
+- **Search**：通过 Responses API 调用 Grok / OpenRouter / Responses-compatible 接口；显式请求时顺序获取 Tavily / Firecrawl 独立信源。
 - **Fetch**：抓取指定 URL 的可读内容，优先使用 Tavily / Firecrawl，最后 fallback 到无 key 的 Direct Fetch。
 - **Map**：发现站点内的候选页面 URL，优先使用 Tavily Map，最后 fallback 到轻量 Direct Map。
 
@@ -16,28 +16,28 @@
 
 ## 快速开始
 
-先安装依赖一次，然后从项目根目录运行脚本：
+先安装依赖一次，然后通过统一入口运行：
 
 ```bash
 npm install
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+./bin/grok-search search "latest Node.js LTS"
+./bin/grok-search fetch https://example.com
+./bin/grok-search map https://docs.example.com --limit 20
 ```
 
 ## 在 pi 中使用（示例）
 
 把本目录 clone 或复制到你的 pi skills 位置，然后通过 `SKILL.md` 启用这个 skill。
 
-示例命令仍然是直接运行脚本：
+示例命令通过统一入口分发到对应操作：
 
 ```bash
-./scripts/search.js "latest Node.js LTS"
-./scripts/fetch.js https://example.com
-./scripts/map.js https://docs.example.com --limit 20
+./bin/grok-search search "latest Node.js LTS"
+./bin/grok-search fetch https://example.com
+./bin/grok-search map https://docs.example.com --limit 20
 ```
 
-其他 agent harness 也可以采用同样方式：读取 `SKILL.md`，再按需运行 `scripts/search.js`、`scripts/fetch.js`、`scripts/map.js`。
+其他 agent harness 也可以采用同样方式：读取 `SKILL.md`，再按需运行 `bin/grok-search search`、`bin/grok-search fetch`、`bin/grok-search map`。
 
 ## 文档
 
@@ -80,7 +80,7 @@ chmod 600 ~/.config/grok-search/config.json
   "responsesAllowedXHandles": [],
   "responsesExcludedXHandles": [],
   "responsesOpenRouterEngine": "auto",
-  "defaultExtra": 6,
+  "defaultExtra": 0,
   "sourceChars": 400,
   "tavilyApiKey": "",
   "tavilyApiUrl": "https://api.tavily.com",
@@ -166,7 +166,7 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `GROK_X_IMAGE_UNDERSTANDING` | `xImageUnderstanding` | 否 | Responses | 分析 X 帖子中的图片，按 token 额外计费。默认 `false`。 |
 | `GROK_X_VIDEO_UNDERSTANDING` | `xVideoUnderstanding` | 否 | Responses | 分析 X 帖子中的视频，按 token 额外计费。默认 `false`。 |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | `responsesOpenRouterEngine` | 否 | OpenRouter Responses | `auto`、`native`、`exa`、`firecrawl`、`parallel` 或 `perplexity`。默认 `auto`。 |
-| `GROK_DEFAULT_EXTRA` | `defaultExtra` | 否 | `search.js` | Tavily 与 Firecrawl 合计的默认 extra source 数量。默认 `6`。 |
+| `GROK_DEFAULT_EXTRA` | `defaultExtra` | 否 | `search` | Tavily 与 Firecrawl 合计的默认 extra source 数量。默认 `0`；需要时显式传入 `--extra N`。 |
 | `GROK_SOURCE_CHARS` | `sourceChars` | 否 | `search.js` | 每条 source stdout snippet 长度。默认 `400`；`0` 表示不输出 snippet。 |
 | `GROK_MAX_SOURCES` | `maxSources` | 否 | `search.js` | stdout 返回的 source card 数量上限。默认 `12`；被裁剪的完整列表落盘到 `sources.raw_path`。 |
 | `GROK_DEADLINE_SECONDS` | `deadlineSeconds` | 否 | 所有脚本 | 单条命令总耗时上限（秒）。默认 `240`，`0` 表示禁用；超时会先输出 `DEADLINE_EXCEEDED` JSON 再退出。 |
@@ -207,18 +207,18 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 ## Search
 
 ```bash
-./scripts/search.js "What changed in the latest Node.js LTS?"
-./scripts/search.js --instructions "只要官方 changelog 的原文和日期，找不到就说" "node lts changelog"
-./scripts/search.js --platform GitHub "pi coding agent search skill"
-./scripts/search.js --responses-allowed-domains github.com "pi coding agent search skill"
-./scripts/search.js --extra 10 "latest pi coding agent docs"
-./scripts/search.js --no-extra "query"
-./scripts/search.js --source-chars 200 "query"
-./scripts/search.js --max-sources 8 "query"
-./scripts/search.js --deadline 120 "query"
-./scripts/search.js --full-sources "debug provider raw"
-./scripts/search.js --responses-openrouter-engine exa "strict web-only query"
-./scripts/search.js --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
+./bin/grok-search search "What changed in the latest Node.js LTS?"
+./bin/grok-search search --instructions "只要官方 changelog 的原文和日期，找不到就说" "node lts changelog"
+./bin/grok-search search --platform GitHub "pi coding agent search skill"
+./bin/grok-search search --responses-allowed-domains github.com "pi coding agent search skill"
+./bin/grok-search search --extra 10 "latest pi coding agent docs"
+./bin/grok-search search --no-extra "query"
+./bin/grok-search search --source-chars 200 "query"
+./bin/grok-search search --max-sources 8 "query"
+./bin/grok-search search --deadline 120 "query"
+./bin/grok-search search --full-sources "debug provider raw"
+./bin/grok-search search --responses-openrouter-engine exa "strict web-only query"
+./bin/grok-search search --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
 ```
 
 `--instructions TEXT` 把"要什么"和"搜什么"分开：query 是 Tavily / Firecrawl 原样检索的关键词，指令只追加到发给 Grok 的 user message 末尾（system prompt 前缀不变，prompt cache 不受影响）；带指令时 query 前会加一行 `# Search query` 标题，否则短 query 会被当成时间上下文的一行而丢失（2026-09-08 实测 Grok 回答"未指定主题"）。`diagnostics.options.instructions_chars` 记录长度，运行记录保存全文；没有配置项默认值。
@@ -230,11 +230,11 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 `--source` 选择挂载哪些 Grok 服务端工具，默认 `web`：
 
 ```bash
-./scripts/search.js --source x "X 上怎么评价 grok-4.6"          # 只查 X
-./scripts/search.js --source both "grok-4.6 发布后的反响"        # Grok 自行路由
-./scripts/search.js --source x --responses-allowed-x-handles xai,OpenAI "query"
-./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
-./scripts/search.js --source x --x-images "query"               # 分析帖子中的图片
+./bin/grok-search search --source x "X 上怎么评价 grok-4.6"          # 只查 X
+./bin/grok-search search --source both "grok-4.6 发布后的反响"        # Grok 自行路由
+./bin/grok-search search --source x --responses-allowed-x-handles xai,OpenAI "query"
+./bin/grok-search search --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./bin/grok-search search --source x --x-images "query"               # 分析帖子中的图片
 ```
 
 - `x_search` 支持 handle allow/deny（互斥，各上限 20）、`--x-from-date` / `--x-to-date`（`YYYY-MM-DD`）、`--x-images` / `--x-videos`（默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关）。
@@ -270,9 +270,9 @@ X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 so
 - `diagnostics.responses_model`：中转实际返回的模型；与请求的不同时 `warnings` 里会有一条（2026-09-08 发现某中转对每次 `grok-4.5` 请求都返回 `grok-4.5-build`，调用次数和费用是 2–3 倍）
 - `diagnostics.grok_endpoint`、`diagnostics.usage` / `diagnostics.cost_usd`（provider 返回时）、`diagnostics.responses_*`（`responses_tool_calls` 为 `{ total, upstream: { web, x } | null, trace: { web, x }, by_action, failed? }` 摘要，完整列表在 `raw_path` 中）、`diagnostics.search_budget`（prompt 里的软预算与实际次数并列，`enforced: false`）、`diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.options`、`diagnostics.duration_ms`、`diagnostics.searched_at`
 
-默认会同时发起 Grok Responses、Tavily Search（配置 key 时）和 Firecrawl Search。三路并行，Tavily/Firecrawl 结果始终作为独立补充信源，不会注入 Grok input。
+默认只发起 Grok Responses。显式传入 `--extra N` 后，额外的 Tavily/Firecrawl 搜索在 Grok 完成后按顺序执行；结果始终作为独立补充信源，不会注入 Grok input。
 
-`--extra N` 表示 Tavily 与 Firecrawl 合计的结果目标数，默认 `6`。两家都可用时平均分配，奇数优先给 Tavily；没有 Tavily key 时全部交给 Firecrawl Keyless。`--no-extra` 会严格关闭两个外部搜索通道。
+`--extra N` 表示 Tavily 与 Firecrawl 合计的结果目标数，默认 `0`。两家都可用时平均分配，奇数优先给 Tavily；没有 Tavily key 时全部交给 Firecrawl Keyless。`--no-extra` 会严格关闭两个外部搜索通道。
 
 当 Grok 明确返回额度耗尽（402、额度类错误码、正文提到 quota / credits / billing 的 429），而 extra sources 可用时，命令会返回标记为 `diagnostics.degraded: true` 的降级结果，`grok_error.code` 为 `QUOTA_EXHAUSTED`；普通 429 限流同样降级，但 code 是 `RATE_LIMITED`。`answer.text` 会明确说明当前仅为 Tavily/Firecrawl 原始搜索结果，`diagnostics.grok_error` 保留脱敏后的上游错误。其他认证、协议或服务错误不会被伪装成降级。
 
@@ -287,14 +287,14 @@ Source card 不再输出长 `description` 或 `content` 字段，只输出短 `s
 ## Fetch
 
 ```bash
-./scripts/fetch.js https://example.com
-./scripts/fetch.js --provider direct https://example.com
+./bin/grok-search fetch https://example.com
+./bin/grok-search fetch --provider direct https://example.com
 ```
 
 fetch 默认只返回 12,000 字符 preview。`--max-chars 50000` 应作为看过 preview 后的显式深读使用，不是常规默认。
 
 ```bash
-./scripts/fetch.js --max-chars 50000 https://example.com
+./bin/grok-search fetch --max-chars 50000 https://example.com
 ```
 
 `--provider auto` 的 provider 顺序：
@@ -316,9 +316,9 @@ fetch 成功输出使用 `content.text`、`content.chars`、`content.original_ch
 ## Map
 
 ```bash
-./scripts/map.js https://docs.example.com --limit 20
-./scripts/map.js --provider direct https://docs.example.com
-./scripts/map.js https://docs.example.com --instructions "only API reference pages" --max-depth 2
+./bin/grok-search map https://docs.example.com --limit 20
+./bin/grok-search map --provider direct https://docs.example.com
+./bin/grok-search map https://docs.example.com --instructions "only API reference pages" --max-depth 2
 ```
 
 `--provider auto` 的 provider 顺序：
@@ -357,8 +357,8 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 不需要 key：
 
 ```bash
-./scripts/fetch.js --provider direct https://example.com
-./scripts/map.js --provider direct https://example.com --limit 5
+./bin/grok-search fetch --provider direct https://example.com
+./bin/grok-search map --provider direct https://example.com --limit 5
 node tests/sources.test.js
 node tests/proxy.test.js
 node tests/responses.test.js
@@ -373,7 +373,7 @@ node tests/argv.test.js
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-./scripts/search.js "What changed in the latest Node.js LTS?"
+./bin/grok-search search "What changed in the latest Node.js LTS?"
 ```
 
 ## 常见错误

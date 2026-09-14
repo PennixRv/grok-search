@@ -61,12 +61,12 @@ Environment:
                        Optional Responses max_turns; default 3
   GROK_RESPONSES_PARALLEL_TOOL_CALLS
                        Optional true|false; false makes Grok search one call per turn. Not sent unless set
-  GROK_DEFAULT_EXTRA   Optional total Tavily/Firecrawl source count; default 6
+  GROK_DEFAULT_EXTRA   Optional total Tavily/Firecrawl source count; default 0
   GROK_SOURCE_CHARS    Optional source snippet size; default 400
   GROK_MAX_SOURCES     Optional cap on returned source cards; default 12
   GROK_DEADLINE_SECONDS
                        Optional whole-command deadline; default 240, 0 disables
-  TAVILY_API_KEY       Optional Tavily parallel source provider
+  TAVILY_API_KEY       Optional explicit extra source provider
   FIRECRAWL_API_KEY    Optional Firecrawl key; keyless search works without it
   GROK_OUTPUT_DIR      Optional directory for full answer when preview is truncated
 `;
@@ -417,10 +417,9 @@ async function extraSources(query, limit, config, filters = {}) {
     const result = await job;
     return { ...result, duration_ms: Math.round(performance.now() - started) };
   };
-  const jobs = [];
-  if (allocation.tavily > 0) jobs.push(timed(tavilySearch(query, allocation.tavily, config, filters)));
-  if (allocation.firecrawl > 0) jobs.push(timed(firecrawlSearch(query, allocation.firecrawl, config, filters)));
-  const results = await Promise.all(jobs);
+  const results = [];
+  if (allocation.tavily > 0) results.push(await timed(tavilySearch(query, allocation.tavily, config, filters)));
+  if (allocation.firecrawl > 0) results.push(await timed(firecrawlSearch(query, allocation.firecrawl, config, filters)));
   const sources = [];
   const providerAttempts = [];
 
@@ -863,17 +862,16 @@ async function publicResult(args, config) {
   const sourceChars = args.sourceChars ?? config.sourceChars;
   const maxSources = args.maxSources ?? config.maxSources;
   const extraOptions = resolveExtra(args, config, searchOptions.searchSource);
-  const grokPromise = grokChannel(args, config, searchOptions).then(
-    (value) => ({ ok: true, value }),
-    (error) => ({ ok: false, error })
-  );
-  const [grokResult, extra] = await Promise.all([
-    grokPromise,
-    extraSources(args.query, extraOptions.limit, config, {
-      allowedDomains: searchOptions.allowedDomains,
-      excludedDomains: searchOptions.excludedDomains,
-    }),
-  ]);
+  let grokResult;
+  try {
+    grokResult = { ok: true, value: await grokChannel(args, config, searchOptions) };
+  } catch (error) {
+    grokResult = { ok: false, error };
+  }
+  const extra = await extraSources(args.query, extraOptions.limit, config, {
+    allowedDomains: searchOptions.allowedDomains,
+    excludedDomains: searchOptions.excludedDomains,
+  });
 
   let grok;
   let degraded = false;

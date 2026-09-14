@@ -1,0 +1,25 @@
+#!/usr/bin/env node
+
+import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const commands = { search: "search.js", fetch: "fetch.js", map: "map.js" };
+const [command, ...args] = process.argv.slice(2);
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+
+if (!commands[command]) {
+  const usage = "Usage: grok-search <search|fetch|map> [options] [query-or-url]";
+  (command === "--help" || command === "-h" ? console.log : console.error)(usage);
+  process.exitCode = command === "--help" || command === "-h" ? 0 : 2;
+} else {
+  const child = spawn(process.execPath, [join(root, "scripts", commands[command]), ...args], { stdio: "inherit" });
+  child.on("error", (error) => {
+    console.error(`Unable to start grok-search ${command}: ${error.message}`);
+    process.exitCode = 1;
+  });
+  child.on("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exitCode = code ?? 1;
+  });
+}

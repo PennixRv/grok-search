@@ -856,22 +856,36 @@ await withServer(
 
 await withServer(
   (() => {
-    const pending = new Map();
-    const seen = new Set();
-    const release = () => {
-      if (seen.size !== 3) return;
-      pending.get("/responses").end(JSON.stringify(responsesPayload("Parallel answer.")));
-      pending.get("/tavily/search").end(
-        JSON.stringify({
-          results: Array.from({ length: 3 }, (_item, index) => ({
-            title: `Tavily ${index + 1}`,
-            url: `https://tavily.example/${index + 1}`,
-            content: "tavily content",
-          })),
-        })
-      );
-      pending.get("/firecrawl/search").end(
-        JSON.stringify({
+    const events = [];
+    return (req, res) => {
+      readJson(req, (body) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        if (req.url === "/responses") {
+          events.push("responses");
+          res.end(JSON.stringify(responsesPayload("Sequential answer.")));
+          return;
+        }
+        if (req.url === "/tavily/search") {
+          assert.deepEqual(events, ["responses"]);
+          events.push("tavily");
+          assert.equal(body.max_results, 3);
+          res.end(JSON.stringify({
+            results: Array.from({ length: 3 }, (_item, index) => ({
+              title: `Tavily ${index + 1}`,
+              url: `https://tavily.example/${index + 1}`,
+              content: "tavily content",
+            })),
+          }));
+          return;
+        }
+        assert.equal(req.url, "/firecrawl/search");
+        assert.deepEqual(events, ["responses", "tavily"]);
+        events.push("firecrawl");
+        if (req.url === "/firecrawl/search") {
+          assert.equal(body.limit, 3);
+          assert.equal(req.headers.authorization, undefined);
+        }
+        res.end(JSON.stringify({
           success: true,
           creditsUsed: 2,
           data: {
@@ -881,32 +895,19 @@ await withServer(
               description: "firecrawl content",
             })),
           },
-        })
-      );
-    };
-    return (req, res) => {
-      readJson(req, (body) => {
-        seen.add(req.url);
-        pending.set(req.url, res);
-        res.writeHead(200, { "content-type": "application/json" });
-        if (req.url === "/tavily/search") assert.equal(body.max_results, 3);
-        if (req.url === "/firecrawl/search") {
-          assert.equal(body.limit, 3);
-          assert.equal(req.headers.authorization, undefined);
-        }
-        release();
+        }));
       });
     };
   })(),
   async (_server, port) => {
-    const searchResult = await runNode(["scripts/search.js", "mock query"], baseGrokEnv(port, {
+    const searchResult = await runNode(["scripts/search.js", "--extra", "6", "mock query"], baseGrokEnv(port, {
       TAVILY_API_KEY: "tavily-key",
       TAVILY_API_URL: `http://127.0.0.1:${port}/tavily`,
       FIRECRAWL_API_URL: `http://127.0.0.1:${port}/firecrawl`,
     }));
     assert.equal(searchResult.code, 0);
     const output = parseJson(searchResult.stdout);
-    assert.equal(output.answer.text, "Parallel answer.");
+    assert.equal(output.answer.text, "Sequential answer.");
     assert.equal(output.sources.total, 7);
     assert.equal(output.sources.omitted, 0);
     assert.equal(output.sources.items.filter((source) => source.provider === "tavily").length, 3);

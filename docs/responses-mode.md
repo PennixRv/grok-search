@@ -3,7 +3,7 @@
 `search.js` 的唯一生产搜索协议是 Responses API：
 
 ```bash
-./scripts/search.js "query"
+./bin/grok-search search "query"
 ```
 
 它不支持 Chat Completions，也没有模式切换或 Chat fallback。
@@ -54,10 +54,10 @@
 | `both` | `web_search` + `x_search` | 由 Grok 自行路由 |
 
 ```bash
-./scripts/search.js --source x "X 上怎么评价 grok-4.6"
-./scripts/search.js --source both "grok-4.6 发布后的反响"
-./scripts/search.js --source x --responses-allowed-x-handles xai,elonmusk "query"
-./scripts/search.js --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./bin/grok-search search --source x "X 上怎么评价 grok-4.6"
+./bin/grok-search search --source both "grok-4.6 发布后的反响"
+./bin/grok-search search --source x --responses-allowed-x-handles xai,elonmusk "query"
+./bin/grok-search search --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
 ```
 
 `x_search` 的过滤参数放在 tool 对象上（不是 `filters`）：
@@ -109,7 +109,7 @@ auto | native | exa | firecrawl | parallel | perplexity
 ```
 
 ```bash
-./scripts/search.js --responses-openrouter-engine exa "query"
+./bin/grok-search search --responses-openrouter-engine exa "query"
 ```
 
 模型名不会自动追加 `:online`。
@@ -189,15 +189,15 @@ citation 本身不带产出工具信息，所以 `tool` 是推断的：**挂了 
 
 ## Tavily 与 Firecrawl
 
-它们与 Responses 请求并行，但不进入 `input`：
+它们在 Responses 请求完成后按显式 extra 配置执行，但不进入 `input`：
 
 ```text
 Grok Responses ──────────────┐
-Tavily Search（有 key）───────┼─ sources.items（去重合并 + 上限裁剪）
-Firecrawl Search（Keyless/key）┘
+Tavily Search（显式 extra）───┼─ sources.items（去重合并 + 上限裁剪）
+Firecrawl Search（显式 extra）┘
 ```
 
-默认合计 6 条；两家可用时 3/3。Firecrawl provider attempt 会包含 `auth_mode`、`requests`、`duration_ms`，可能包含 `credits_used`；冷却期内为 `skipped: true`。域名过滤会下推给两家，域外结果在排序时降到最后并计入 `off_domain`。`--instructions` 不会传给两家。
+默认不请求额外信源（合计 `0`）。显式非零目标时两家可用则按目标均分，奇数优先 Tavily。Firecrawl provider attempt 会包含 `auth_mode`、`requests`、`duration_ms`，可能包含 `credits_used`；冷却期内为 `skipped: true`。域名过滤会下推给两家，域外结果在排序时降到最后并计入 `off_domain`。`--instructions` 不会传给两家。
 
 ## 额度错误
 

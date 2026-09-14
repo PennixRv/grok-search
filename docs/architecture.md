@@ -9,7 +9,7 @@
 ## 组件
 
 ```text
-scripts/search.js
+bin/grok-search search
   ├─ lib/grok-responses.js  Responses 请求、tool trace 与 citation 解析
   ├─ lib/context.js         本地时间和 platform 上下文
   ├─ lib/providers.js       fetch / map 编排：provider 顺序、X 原帖 Direct 优先、失败接力；re-export 下面四个适配器
@@ -38,9 +38,9 @@ scripts/map.js
 query
   ├─ Grok Responses
   │    └─ provider-native web_search / x_search（由 --source 决定挂载哪些）
-  ├─ Tavily Search（配置 key 时）
-  └─ Firecrawl Search（Keyless 或 API key）
-       ↓ 三路并行
+  ├─ Tavily Search（显式 extra 且配置 key 时）
+  └─ Firecrawl Search（显式 extra，Keyless 或 API key）
+       ↓ Grok 完成后按需执行
   result JSON
        ├─ answer
        ├─ sources.items（合并去重后按 citation > opened > 域内 extra > searched > 域外 extra 裁剪，默认 12 条）
@@ -49,7 +49,7 @@ query
        └─ diagnostics
 ```
 
-Tavily 与 Firecrawl 永远是独立证据通道，不进入 Grok input。`--extra N` 是两家合计的目标数；默认 6，两家可用时均分，奇数优先 Tavily。两家都只搜网页，所以 `--source x` 下默认不跑（`extra_mode: off-x-only`，写 warning），`--extra N` 可强制；`--source both` 仍默认跑。`--responses-allowed-domains` / `--responses-excluded-domains` 会下推给两家（Tavily `include_domains` / `exclude_domains`，Firecrawl `includeDomains` / `excludeDomains`），仍漏进来的域外结果降到最后一档而不丢弃。`--instructions` 只进 Grok 的 user message，两家只收 query。
+Tavily 与 Firecrawl 永远是独立证据通道，不进入 Grok input。默认 `extra=0`；显式 `--extra N` 或非零配置才会在 Grok 完成后执行。两家合计目标数两家可用时均分，奇数优先 Tavily。两家都只搜网页，所以 `--source x` 下默认不跑（`extra_mode: off-x-only`，写 warning），`--extra N` 可强制；`--responses-allowed-domains` / `--responses-excluded-domains` 会下推给两家（Tavily `include_domains` / `exclude_domains`，Firecrawl `includeDomains` / `excludeDomains`），仍漏进来的域外结果降到最后一档而不丢弃。`--instructions` 只进 Grok 的 user message，两家只收 query。
 
 Firecrawl 处于额度冷却期（`<stateDir>/firecrawl-cooldown.json`，见下）时 search 直接跳过它：有 Tavily 则名额全给 Tavily，否则 extra 为空并写 warning。
 
