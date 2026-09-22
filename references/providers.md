@@ -4,7 +4,7 @@ Read this when a result mentions a skipped or failed provider, when configuratio
 
 ## Provider Order
 
-- `search.js`: Grok Responses runs alongside independent Tavily Search (needs `TAVILY_API_KEY`) and Firecrawl Search (keyless by default, `FIRECRAWL_API_KEY` when set). Extras are never fed into Grok. The default combined extra target is 6; `--extra N` changes it, `--no-extra` disables both extras and the degraded fallback. On `--source x` extras are off unless `--extra N` is given (`extra_mode: "off-x-only"`).
+- `search.js`: Grok Responses runs alongside independent Tavily Search (needs `TAVILY_API_KEY`) and Firecrawl Search (keyless by default, `FIRECRAWL_API_KEY` when set). Extras are never fed into Grok. The default combined extra target is 0; `--extra N` enables and sizes it, `--no-extra` disables both extras and the degraded fallback. On `--source x` extras are off unless `--extra N` is given (`extra_mode: "off-x-only"`).
 - `fetch.js --provider auto`: Tavily Extract → Firecrawl Scrape → Direct Fetch. Exception: X post URLs try Direct first regardless of keys (`references/x-search.md`).
 - `map.js --provider auto`: Tavily Map → Direct Map.
 - `--responses-openrouter-engine exa` forces a web-only engine on OpenRouter.

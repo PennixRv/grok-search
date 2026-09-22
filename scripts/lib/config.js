@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -24,6 +25,7 @@ const DEFAULT_RESPONSES_MAX_TURNS = 3;
 const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
 const DEFAULT_RESPONSES_OPENROUTER_ENGINE = "auto";
 const DEFAULT_SEARCH_SOURCE = "web";
+const MAX_CONFIG_FILE_BYTES = 64 * 1024;
 const API_PROVIDERS = new Set(["xai", "openrouter", "openai-compatible"]);
 const OPENROUTER_SEARCH_ENGINES = new Set(["auto", "native", "exa", "firecrawl", "parallel", "perplexity"]);
 const SEARCH_SOURCES = new Set(["web", "x", "both"]);
@@ -79,17 +81,31 @@ export function configFilePath() {
 }
 
 export async function loadConfigFile() {
+  const configPath = configFilePath();
+  let handle;
   let text;
   try {
-    text = await readFile(configFilePath(), "utf8");
+    const initial = await lstat(configPath);
+    if (!initial.isFile() || initial.isSymbolicLink() || initial.size > MAX_CONFIG_FILE_BYTES || (initial.mode & 0o077) !== 0) {
+      throw new ConfigError("配置文件不符合安全读取要求", "CONFIG_FILE_UNSAFE");
+    }
+    handle = await open(configPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > MAX_CONFIG_FILE_BYTES || (metadata.mode & 0o077) !== 0) {
+      throw new ConfigError("配置文件不符合安全读取要求", "CONFIG_FILE_UNSAFE");
+    }
+    text = await handle.readFile({ encoding: "utf8" });
   } catch (error) {
     if (error.code === "ENOENT" || error.code === "ENOTDIR") return {};
-    throw new ConfigError(`无法读取配置文件 ${configFilePath()}: ${error.message}`, "CONFIG_FILE_INVALID");
+    if (error instanceof ConfigError) throw error;
+    throw new ConfigError("无法安全读取配置文件", "CONFIG_FILE_INVALID");
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
   try {
     return JSON.parse(text);
-  } catch (error) {
-    throw new ConfigError(`配置文件 ${configFilePath()} 不是有效 JSON: ${error.message}`, "CONFIG_FILE_INVALID");
+  } catch {
+    throw new ConfigError("配置文件不是有效 JSON", "CONFIG_FILE_INVALID");
   }
 }
 

@@ -65,6 +65,10 @@ cp config.example.json ~/.config/grok-search/config.json
 chmod 600 ~/.config/grok-search/config.json
 ```
 
+配置文件只接受普通私有文件：运行时会拒绝软链接、目录、超过 64 KiB 的
+文件以及任何 group/other 可读写的模式，并且不会把路径、内容或 key 写入错误
+输出。临时环境变量仍优先于此 owner 文件。
+
 完整配置示例：
 
 ```json

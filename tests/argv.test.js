@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -105,6 +105,11 @@ function baseGrokEnv(port, extra = {}) {
     GROK_MODEL: "mock-model",
     ...extra,
   };
+}
+
+async function writePrivateConfig(file, value) {
+  await writeFile(file, typeof value === "string" ? value : JSON.stringify(value), "utf8");
+  await chmod(file, 0o600);
 }
 
 let result = await runNode(["scripts/fetch.js", "--provider", "bad", "https://example.com"]);
@@ -581,10 +586,9 @@ for (const [args, code, exitCode] of [
 {
   const filterHome = await mkdtemp(path.join(tmpdir(), "grok-search-filters-"));
   await mkdir(path.join(filterHome, ".config", "grok-search"), { recursive: true });
-  await writeFile(
+  await writePrivateConfig(
     path.join(filterHome, ".config", "grok-search", "config.json"),
-    JSON.stringify({ responsesExcludedDomains: ["reddit.com", "quora.com"], responsesExcludedXHandles: ["spam_account"] }),
-    "utf8"
+    { responsesExcludedDomains: ["reddit.com", "quora.com"], responsesExcludedXHandles: ["spam_account"] },
   );
   const filterEnv = (port) => ({ ...baseGrokEnv(port), HOME: filterHome, USERPROFILE: filterHome });
 
@@ -634,10 +638,9 @@ for (const [args, code, exitCode] of [
   }
 
   // A merged deny-list that overflows the provider cap must fail loudly, not silently drop.
-  await writeFile(
+  await writePrivateConfig(
     path.join(filterHome, ".config", "grok-search", "config.json"),
-    JSON.stringify({ responsesExcludedDomains: ["a.com", "b.com", "c.com", "d.com", "e.com"] }),
-    "utf8"
+    { responsesExcludedDomains: ["a.com", "b.com", "c.com", "d.com", "e.com"] },
   );
   result = await runNode(["scripts/search.js", "--no-extra", "--responses-excluded-domains", "f.com", "q"], filterEnv(1));
   assert.notEqual(result.code, 0);
@@ -649,10 +652,9 @@ for (const [args, code, exitCode] of [
 {
   const allowHome = await mkdtemp(path.join(tmpdir(), "grok-search-allow-"));
   await mkdir(path.join(allowHome, ".config", "grok-search"), { recursive: true });
-  await writeFile(
+  await writePrivateConfig(
     path.join(allowHome, ".config", "grok-search", "config.json"),
-    JSON.stringify({ responsesAllowedDomains: ["docs.python.org", "peps.python.org"] }),
-    "utf8"
+    { responsesAllowedDomains: ["docs.python.org", "peps.python.org"] },
   );
   const allowEnv = (port) => ({ ...baseGrokEnv(port), HOME: allowHome, USERPROFILE: allowHome });
 
@@ -699,10 +701,9 @@ for (const [args, code, exitCode] of [
 {
   const handleHome = await mkdtemp(path.join(tmpdir(), "grok-search-x-config-"));
   await mkdir(path.join(handleHome, ".config", "grok-search"), { recursive: true });
-  await writeFile(
+  await writePrivateConfig(
     path.join(handleHome, ".config", "grok-search", "config.json"),
-    JSON.stringify({ searchSource: "web", responsesExcludedXHandles: ["spam_account"], xImageUnderstanding: true }),
-    "utf8"
+    { searchSource: "web", responsesExcludedXHandles: ["spam_account"], xImageUnderstanding: true },
   );
   const handleEnv = (port) => ({ ...baseGrokEnv(port), HOME: handleHome, USERPROFILE: handleHome });
 
@@ -768,10 +769,9 @@ await withServer(
   const removedHome = await mkdtemp(path.join(tmpdir(), "grok-search-removed-x-"));
   await mkdir(path.join(removedHome, ".config", "grok-search"), { recursive: true });
   const writeRemovedConfig = (value) =>
-    writeFile(
+    writePrivateConfig(
       path.join(removedHome, ".config", "grok-search", "config.json"),
-      JSON.stringify({ responsesIncludeXSearch: value }),
-      "utf8"
+      { responsesIncludeXSearch: value },
     );
   const removedEnv = (port) => ({ ...baseGrokEnv(port), HOME: removedHome, USERPROFILE: removedHome });
   const mentionsRemoved = (warning) => /responsesIncludeXSearch/.test(warning);
@@ -1433,13 +1433,42 @@ await withServer(
 {
   const badConfigHome = await mkdtemp(path.join(tmpdir(), "grok-search-bad-config-"));
   await mkdir(path.join(badConfigHome, ".config", "grok-search"), { recursive: true });
-  await writeFile(path.join(badConfigHome, ".config", "grok-search", "config.json"), "{ bad json", "utf8");
+  await writePrivateConfig(path.join(badConfigHome, ".config", "grok-search", "config.json"), "{ bad json");
   result = await runNode(["scripts/fetch.js", "--provider", "direct", "https://example.com/"], {
     HOME: badConfigHome,
     USERPROFILE: badConfigHome,
   });
   assert.equal(result.code, 1);
   assertCommandErrorSchema(parseJson(result.stdout), "fetched_at", "CONFIG_FILE_INVALID");
+}
+
+{
+  const unsafeConfigHome = await mkdtemp(path.join(tmpdir(), "grok-search-unsafe-config-"));
+  const configDirectory = path.join(unsafeConfigHome, ".config", "grok-search");
+  const configPath = path.join(configDirectory, "config.json");
+  const secret = "unsafe-config-secret";
+  const assertUnsafeConfig = async () => {
+    result = await runNode(["scripts/fetch.js", "--provider", "direct", "https://example.com/"], {
+      HOME: unsafeConfigHome,
+      USERPROFILE: unsafeConfigHome,
+    });
+    assert.equal(result.code, 1);
+    assertCommandErrorSchema(parseJson(result.stdout), "fetched_at", "CONFIG_FILE_UNSAFE");
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(secret));
+  };
+  await mkdir(configDirectory, { recursive: true });
+  await writeFile(configPath, JSON.stringify({ apiKey: secret }), "utf8");
+  await chmod(configPath, 0o644);
+  await assertUnsafeConfig();
+  await rm(configPath);
+  const target = path.join(unsafeConfigHome, "target.json");
+  await writeFile(target, JSON.stringify({ apiKey: secret }), "utf8");
+  await symlink(target, configPath);
+  await assertUnsafeConfig();
+  await rm(configPath);
+  await writeFile(configPath, "x".repeat(64 * 1024 + 1), "utf8");
+  await chmod(configPath, 0o600);
+  await assertUnsafeConfig();
 }
 
 result = await runNode(["scripts/fetch.js", "--provider", "direct", "https://example.com/"], { GROK_PROXY: "not-a-url" });
