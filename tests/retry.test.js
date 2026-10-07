@@ -2,8 +2,21 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { requestJson } from "../scripts/lib/providers.js";
+import { readResponseText } from "../scripts/lib/http.js";
 
 const config = { retryMaxAttempts: 3, retryMultiplier: 0, retryMaxWait: 0.05, debug: false };
+
+await assert.rejects(
+  readResponseText({ body: { getReader: () => ({
+    read: async () => ({ value: new Uint8Array(5), done: false }),
+    cancel: async () => {},
+  }) } }, 4),
+  /exceeds 4 bytes/,
+);
+await assert.rejects(
+  readResponseText({ body: {} }, 4),
+  /no bounded body reader/,
+);
 
 async function withServer(handler, callback) {
   const server = createServer(handler);

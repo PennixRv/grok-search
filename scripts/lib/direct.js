@@ -1,4 +1,4 @@
-import { trimBody } from "./http.js";
+import { readResponseText, trimBody } from "./http.js";
 import { isXUrl, parseXPostUrl } from "./sources.js";
 
 const DIRECT_FETCH_MAX_BYTES = 2 * 1024 * 1024;
@@ -171,8 +171,9 @@ export async function directMap(url, options = {}) {
 function headerNumber(headers, name) {
   const value = headers.get(name);
   if (!value) return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function isLikelyAttachment(headers) {
@@ -198,36 +199,12 @@ function isTextualContentType(contentType) {
 }
 
 async function readTextWithLimit(response, limitBytes) {
-  const reader = response.body?.getReader();
-  if (!reader) return { text: await response.text(), exceeded: false };
-
-  const chunks = [];
-  let total = 0;
-  let exceeded = false;
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    total += value.byteLength;
-    if (total > limitBytes) {
-      const used = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-      const remaining = Math.max(0, limitBytes - used);
-      if (remaining > 0) chunks.push(value.slice(0, remaining));
-      exceeded = true;
-      await reader.cancel();
-      break;
-    }
-    chunks.push(value);
+  try {
+    return { text: await readResponseText(response, limitBytes), exceeded: false };
+  } catch (error) {
+    if (error.responseTooLarge) return { text: "", exceeded: true };
+    throw error;
   }
-
-  const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { text: new TextDecoder("utf-8", { fatal: false }).decode(bytes), exceeded };
 }
 
 function decodeHtmlEntities(text) {

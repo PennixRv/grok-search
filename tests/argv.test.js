@@ -131,6 +131,18 @@ result = await runNode(["scripts/map.js", "ftp://example.com"]);
 assert.equal(result.code, 2);
 assertCommandErrorSchema(parseJson(result.stdout), "mapped_at", "ARGUMENT_ERROR");
 
+for (const [script, option, url] of [
+  ["scripts/fetch.js", "--max-chars", "https://example.com"],
+  ["scripts/map.js", "--limit", "https://example.com"],
+  ["scripts/search.js", "--max-sources", "query"],
+]) {
+  for (const malformed of ["10s", "3abc", "1.5", "9007199254740992"]) {
+    result = await runNode([script, option, malformed, url]);
+    assert.equal(result.code, 2, `${script} ${option} ${malformed}`);
+    assert.equal(parseJson(result.stdout).error.code, "ARGUMENT_ERROR");
+  }
+}
+
 await withServer(
   (req, res) => {
     req.resume();

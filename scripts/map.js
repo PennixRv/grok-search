@@ -34,8 +34,9 @@ Environment:
 
 function parseIntOption(name, value, { min = 0 } = {}) {
   if (value == null || value === "") throw new Error(`${name} 缺少数值`);
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < min) throw new Error(`${name} 必须是 >= ${min} 的整数`);
+  if (!/^\d+$/.test(String(value))) throw new Error(`${name} 必须是 >= ${min} 的整数`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min) throw new Error(`${name} 必须是 >= ${min} 的整数`);
   return parsed;
 }
 

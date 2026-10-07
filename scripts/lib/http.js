@@ -5,6 +5,36 @@ import { configureProxyFromEnv } from "./proxy.js";
 configureProxyFromEnv();
 
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+export async function readResponseText(response, maxBytes = MAX_RESPONSE_BYTES) {
+  if (!response.body) return "";
+  const reader = response.body.getReader?.();
+  if (!reader) throw new Error("HTTP response has no bounded body reader");
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      const error = new Error(`HTTP response exceeds ${maxBytes} bytes`);
+      error.retryable = false;
+      error.responseTooLarge = true;
+      throw error;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -111,7 +141,7 @@ export async function requestJson(url, { headers, body, timeoutMs, config, retry
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      const text = await response.text();
+      const text = await readResponseText(response);
       clearTimeout(timer);
 
       if (!response.ok) {
