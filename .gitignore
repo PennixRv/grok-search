@@ -1,5 +1,5 @@
 # --- 本项目特定忽略 ---
-.agent/          
+.agent/
 repo-references/
 .private/
 benchmarks/results/
