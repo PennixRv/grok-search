@@ -9,6 +9,12 @@ metadata:
 
 Use the `grok-search` executable from the grok-search root (the directory of this SKILL.md), or use its absolute path. The Pennix installer installs the local production dependency; do not run global `npm` installs or create a provider wrapper.
 
+This executable is owned by `grok-search` and must be launched through the host's native
+direct command path. Do not start it with `mcp__fastctx.run`, a FastCtx job, `replace`, shell
+HTTP, or a generic wrapper; FastCtx is not a Grok transport, provider, credential path, or
+fallback owner. After a completed Grok call, FastCtx may read an approved ordinary result file
+for bounded analysis without retrying, polling, or changing the Grok state.
+
 ## Choose The Command
 
 - URL given → `grok-search fetch URL`.
