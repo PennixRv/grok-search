@@ -8,15 +8,13 @@ import { assertProxyUsable } from "./lib/proxy.js";
 const DEFAULT_MAX_CHARS = 12000;
 
 function usage() {
-  return `Usage: ./scripts/fetch.js [--provider auto|tavily|firecrawl|direct] [--max-chars N] [--deadline SECONDS] <url>
+  return `Usage: ./scripts/fetch.js [--provider auto|tavily|direct] [--max-chars N] [--deadline SECONDS] <url>
 
-Fetch a web page as readable text/Markdown using Tavily Extract, Firecrawl Scrape, then Direct Fetch.
+Fetch a web page as readable text/Markdown using Tavily Extract, then Direct Fetch.
 
 Environment:
   TAVILY_API_KEY       Tavily key used by the primary provider
   TAVILY_API_URL       Default: https://api.tavily.com
-  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless fallback works without it
-  FIRECRAWL_API_URL    Default: https://api.firecrawl.dev/v2
   GROK_DEADLINE_SECONDS
                        Optional whole-command deadline; default 240, 0 disables
   GROK_OUTPUT_DIR      Optional directory for full content when preview is truncated
@@ -78,8 +76,8 @@ function parseArgs(argv) {
   }
 
   if (!url) throw new Error("缺少 URL");
-  if (!["auto", "tavily", "firecrawl", "direct"].includes(provider)) {
-    throw new Error("--provider 只能是 auto、tavily、firecrawl 或 direct");
+  if (!["auto", "tavily", "direct"].includes(provider)) {
+    throw new Error("--provider 只能是 auto、tavily 或 direct；firecrawl 已移除");
   }
 
   let parsed;
@@ -95,22 +93,12 @@ function parseArgs(argv) {
   return { url: parsed.toString(), provider, maxChars, deadline };
 }
 
-// Firecrawl bills ordinary pages at 1 credit; X posts and other JS-heavy pages cost ~30, and
-// the keyless tier only has a few dozen per day. Worth a line so the agent can budget.
-const HIGH_CREDITS_THRESHOLD = 10;
-
 async function publicResult(args, result, config) {
   const ok = Boolean(result.ok);
   const warnings = [...(result.warnings || [])];
-  if (Number.isFinite(result.credits_used) && result.credits_used >= HIGH_CREDITS_THRESHOLD) {
-    warnings.push(
-      `Firecrawl 本次消耗 ${result.credits_used} credits（普通页面 1 credit）；keyless 免费档几次这样的抓取就会耗尽当日额度，X 原帖优先考虑 Direct。`
-    );
-  }
   const fetchedAt = new Date().toISOString();
   const diagnostics = {
     provider: result.provider,
-    ...(result.auth_mode ? { firecrawl_auth_mode: result.auth_mode } : {}),
     warnings,
     provider_attempts: result.tried || [],
     options: {
@@ -213,7 +201,7 @@ try {
     const output = errorOutput(error, "DEADLINE_EXCEEDED");
     const runPath = writeRunRecordSync(config, { kind: "fetch", label: args.url, record: runRecord(config, args, output, null) });
     if (runPath) output.diagnostics.run_path = runPath;
-    printJson(output);
+    printJson(output, { config, kind: "fetch", provider: "deadline", label: args?.url || "deadline" });
     console.error(error.message);
     process.exit(1);
   });
@@ -227,7 +215,7 @@ try {
     });
     if (runPath) output.diagnostics.run_path = runPath;
 
-    printJson(output);
+    printJson(output, { config, kind: "fetch", provider: "result", label: args.url });
     if (output.error) {
       console.error(output.error.message);
       process.exitCode = 1;
@@ -242,7 +230,7 @@ try {
     const runPath = await writeRunRecord(config, { kind: "fetch", label: args?.url || "error", record: runRecord(config, args, output, null) });
     if (runPath) output.diagnostics.run_path = runPath;
   }
-  printJson(output);
+  printJson(output, { config, kind: "fetch", provider: "error", label: args?.url || "error" });
   console.error(error.message);
   if (stage === "argument") console.error(usage());
   process.exitCode = stage === "argument" ? 2 : 1;

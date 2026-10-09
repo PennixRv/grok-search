@@ -23,7 +23,7 @@ function responsesEndpoint(config) {
 }
 
 /**
- * The query doubles as the keywords Tavily/Firecrawl search for, so it should stay short.
+ * The query doubles as the keywords Tavily search for, so it should stay short.
  * Anything the caller wants from Grok beyond "search this" (what to return, in which
  * language, what not to do) travels here, appended to the user message so the system
  * prompt prefix stays cacheable.

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runRecordBase, writeFullOutput, writeRunRecord, writeRunRecordSync } from "../scripts/lib/output.js";
+import { printJson, runRecordBase, writeFullOutput, writeRunRecord, writeRunRecordSync } from "../scripts/lib/output.js";
 
 const outputDir = await mkdtemp(path.join(tmpdir(), "grok-search-output-test-"));
 const config = { outputDir, outputRetentionDays: 30 };
@@ -48,6 +48,33 @@ assert.equal(JSON.parse(await readFile(syncPath, "utf8")).kind, "fetch");
 // runLog: false disables both variants without touching the disk.
 assert.equal(await writeRunRecord({ ...config, runLog: false }, { kind: "search", label: "off", record: base }), null);
 assert.equal(writeRunRecordSync({ ...config, runLog: false }, { kind: "search", label: "off", record: base }), null);
+
+const originalLog = console.log;
+let boundedOutput;
+console.log = (value) => {
+  boundedOutput = JSON.parse(value);
+};
+try {
+  printJson({ payload: "x".repeat(50 * 1024) }, { config, kind: "search", provider: "test", label: "large" });
+} finally {
+  console.log = originalLog;
+}
+assert.equal(boundedOutput.truncated, true);
+assert.equal(typeof boundedOutput.full_path, "string");
+assert.equal(boundedOutput.bytes > 45 * 1024, true);
+assert.equal(JSON.parse(await readFile(boundedOutput.full_path, "utf8")).payload.length, 50 * 1024);
+
+console.log = (value) => {
+  boundedOutput = JSON.parse(value);
+};
+try {
+  printJson({ payload: "x".repeat(50 * 1024) });
+} finally {
+  console.log = originalLog;
+}
+assert.equal(boundedOutput.truncated, true);
+assert.equal(Object.hasOwn(boundedOutput, "full_path"), false);
+assert.match(boundedOutput.warning, /无法保存完整输出/);
 
 // Secrets pasted into argv are masked in the record header.
 const originalArgv = process.argv;

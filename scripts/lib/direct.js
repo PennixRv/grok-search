@@ -341,8 +341,8 @@ export function validateXPostContent(content, post) {
  * Whether fetchUrl(auto) should try Direct before the paid providers for this URL. Only X
  * status pages with a handle qualify (the handle is what the validation checks). Applies
  * regardless of keys (decided 2026-09-08 after a side-by-side): Tavily returns the post
- * without its date, Firecrawl bills ~30 credits and takes 10s+, Direct is free and carries
- * the date. Callers who want the thread ask for Firecrawl explicitly.
+ * without its date, an external fallback is slower and less reliable, while Direct is free and
+ * carries the date.
  */
 export function directFirstForX(url, config, provider = "auto") {
   if (provider !== "auto") return null;

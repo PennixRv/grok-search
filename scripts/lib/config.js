@@ -17,9 +17,7 @@ export const DEFAULT_SOURCE_CHARS = 400;
 export const DEFAULT_MAX_SOURCES = 12;
 const DEFAULT_DEADLINE_SECONDS = 240;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
-const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
-const DEFAULT_STATE_DIR = path.join(homedir(), ".cache", "grok-search");
-const DEFAULT_OUTPUT_DIR = path.join(DEFAULT_STATE_DIR, "outputs");
+const DEFAULT_OUTPUT_DIR = path.join(homedir(), ".cache", "grok-search", "outputs");
 const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
 const DEFAULT_RESPONSES_MAX_TURNS = 3;
 const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
@@ -27,7 +25,7 @@ const DEFAULT_RESPONSES_OPENROUTER_ENGINE = "auto";
 const DEFAULT_SEARCH_SOURCE = "web";
 const MAX_CONFIG_FILE_BYTES = 64 * 1024;
 const API_PROVIDERS = new Set(["xai", "openrouter", "openai-compatible"]);
-const OPENROUTER_SEARCH_ENGINES = new Set(["auto", "native", "exa", "firecrawl", "parallel", "perplexity"]);
+const OPENROUTER_SEARCH_ENGINES = new Set(["auto", "native", "exa", "parallel", "perplexity"]);
 const SEARCH_SOURCES = new Set(["web", "x", "both"]);
 export const X_HANDLE_LIMIT = 20;
 
@@ -239,12 +237,6 @@ export async function loadConfig({ requireGrok = false } = {}) {
   const outputDir = resolveUserPath(
     envOrFile("GROK_OUTPUT_DIR", fileConfig, ["GROK_OUTPUT_DIR", "outputDir", "output_dir"], DEFAULT_OUTPUT_DIR)
   );
-  // Small cross-command state (provider cooldowns). Kept outside outputDir so the retention
-  // sweep never deletes it.
-  const stateDir = resolveUserPath(
-    envOrFile("GROK_STATE_DIR", fileConfig, ["GROK_STATE_DIR", "stateDir", "state_dir"], DEFAULT_STATE_DIR)
-  );
-
   return {
     grokApiUrl,
     grokApiKey,
@@ -315,14 +307,6 @@ export async function loadConfig({ requireGrok = false } = {}) {
     tavilyApiUrl: envOrFile("TAVILY_API_URL", fileConfig, ["TAVILY_API_URL", "tavilyApiUrl", "tavily_api_url"], DEFAULT_TAVILY_API_URL),
     tavilyApiKey: envOrFile("TAVILY_API_KEY", fileConfig, ["TAVILY_API_KEY", "tavilyApiKey", "tavily_api_key"]),
 
-    firecrawlApiUrl: envOrFile(
-      "FIRECRAWL_API_URL",
-      fileConfig,
-      ["FIRECRAWL_API_URL", "firecrawlApiUrl", "firecrawl_api_url"],
-      DEFAULT_FIRECRAWL_API_URL
-    ),
-    firecrawlApiKey: envOrFile("FIRECRAWL_API_KEY", fileConfig, ["FIRECRAWL_API_KEY", "firecrawlApiKey", "firecrawl_api_key"]),
-
     retryMaxAttempts: envInt("GROK_RETRY_MAX_ATTEMPTS", 3, { min: 1 }),
     retryMultiplier: envFloat("GROK_RETRY_MULTIPLIER", 1, { min: 0 }),
     retryMaxWait: envFloat("GROK_RETRY_MAX_WAIT", 10, { min: 0 }),
@@ -343,7 +327,6 @@ export async function loadConfig({ requireGrok = false } = {}) {
       { min: 0 }
     ),
     outputDir,
-    stateDir,
     outputRetentionDays: DEFAULT_OUTPUT_RETENTION_DAYS,
     // One JSON record per command (query, options, answer, sources, usage, errors) so a run
     // can be replayed without a session export. `GROK_RUN_LOG=off` disables it.

@@ -6,6 +6,7 @@ import { redactSecrets } from "./http.js";
 
 const OUTPUT_PREFIX = "grok-search-";
 export const RUN_RECORD_SCHEMA_VERSION = 2;
+export const MAX_SERIALIZED_OUTPUT_BYTES = 45 * 1024;
 
 function debug(config, message) {
   if (config?.debug) console.error(`[grok-search] ${message}`);
@@ -166,6 +167,38 @@ export function jsonReplacer(_key, value) {
   return value === undefined ? undefined : value;
 }
 
-export function printJson(value) {
-  console.log(JSON.stringify(value, jsonReplacer, 2));
+export function printJson(value, { config, kind = "output", provider = "result", label = "output" } = {}) {
+  const serialized = JSON.stringify(value, jsonReplacer, 2);
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  if (bytes <= MAX_SERIALIZED_OUTPUT_BYTES) {
+    console.log(serialized);
+    return;
+  }
+
+  let fullPath = null;
+  if (config?.outputDir) {
+    try {
+      mkdirSync(config.outputDir, { recursive: true, mode: 0o700 });
+      fullPath = outputPath(config, { kind, provider, label, extension: "json" });
+      writeFileSync(fullPath, serialized, { encoding: "utf8", mode: 0o600 });
+    } catch (error) {
+      debug(config, `bounded output archive skipped: ${error.message}`);
+    }
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        truncated: true,
+        ...(fullPath ? { full_path: fullPath } : {}),
+        chars: serialized.length,
+        bytes,
+        warning: fullPath
+          ? `完整 JSON 输出超过 ${MAX_SERIALIZED_OUTPUT_BYTES} 字节，已保存到 full_path。`
+          : `完整 JSON 输出超过 ${MAX_SERIALIZED_OUTPUT_BYTES} 字节，且无法保存完整输出。`,
+      },
+      jsonReplacer,
+      2
+    )
+  );
 }

@@ -105,7 +105,7 @@ OpenRouter 使用：
 可选 engine：
 
 ```text
-auto | native | exa | firecrawl | parallel | perplexity
+auto | native | exa | parallel | perplexity
 ```
 
 ```bash
@@ -187,17 +187,16 @@ X citation 只带裸 URL，且 `title` 就是 inline citation 序号（`"1"`、`
 
 citation 本身不带产出工具信息，所以 `tool` 是推断的：**挂了 `x_search` 时**（`--source x` / `both`，以及 OpenRouter——那里 `x_search` 必然随行）X 链接标为 `x_search`；`--source web` 下不标，因为 web search 本来就会索引 x.com 页面，标成 `x_search` 等于报告一次没发生的检索。URL 还原出的 `x_handle` / `x_post_id` 与挂了哪个工具无关，始终保留。
 
-## Tavily 与 Firecrawl
+## Tavily extra
 
 它们在 Responses 请求完成后按显式 extra 配置执行，但不进入 `input`：
 
 ```text
 Grok Responses ──────────────┐
 Tavily Search（显式 extra）───┼─ sources.items（去重合并 + 上限裁剪）
-Firecrawl Search（显式 extra）┘
 ```
 
-默认不请求额外信源（合计 `0`）。显式非零目标时两家可用则按目标均分，奇数优先 Tavily。Firecrawl provider attempt 会包含 `auth_mode`、`requests`、`duration_ms`，可能包含 `credits_used`；冷却期内为 `skipped: true`。域名过滤会下推给两家，域外结果在排序时降到最后并计入 `off_domain`。`--instructions` 不会传给两家。
+默认不请求额外信源（`0`）。显式非零目标时只请求 Tavily。域名过滤会下推给 Tavily，域外结果在排序时降到最后并计入 `off_domain`。`--instructions` 不会传给 Tavily。
 
 ## 额度错误
 
@@ -226,6 +225,5 @@ Firecrawl Search（显式 extra）┘
 - 中转差异还包括：X 搜索以 `custom_tool_call`（`x_keyword_search` / `x_thread_fetch` …）形式返回，解析器按 `x_search` 计数并把 `by_action` 写成 `keyword_search` / `thread_fetch`；每个 turn 的过场 message（"I'll search X…"）被丢弃，`answer.text` 只取最后一条，除非前面的 message 很长或带 citation
 - `options.instructions_chars`（传了 `--instructions` 时）
 - `extra_allocation`
-- `firecrawl_auth_mode`
 - `degraded` / `grok_error`
 - `usage` / `cost_usd`

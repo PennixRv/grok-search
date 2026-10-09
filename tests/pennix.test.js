@@ -48,7 +48,6 @@ try {
     GROK_MODEL: "test-model",
     TAVILY_API_KEY: "test-tavily-key",
     TAVILY_API_URL: `http://127.0.0.1:${port}/tavily`,
-    FIRECRAWL_API_URL: `http://127.0.0.1:${port}/firecrawl`,
   });
   assert.equal(JSON.parse(result.stdout).diagnostics.options.extra, 1);
   assert.deepEqual(events, ["responses-start", "responses-end", "tavily-start"]);

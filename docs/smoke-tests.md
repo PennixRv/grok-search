@@ -6,40 +6,17 @@
 npm test
 ```
 
-覆盖 Responses body/解析、Grok 后额外 provider 的顺序执行、Keyless/API-key、额度降级与限流区分、source schema（字段合并、序号标题、opened、域名降级）、Firecrawl 重试 / Retry-After / 冷却、X 原帖 Direct 校验、运行记录、代理与 fetch/map fallback。
+覆盖 Responses body/解析、Grok 后 Tavily extra、额度降级与限流区分、source schema（字段合并、序号标题、opened、域名降级）、HTTP 重试 / Retry-After、X 原帖 Direct 校验、运行记录、代理与 fetch/map fallback。
 
 ## 无 Grok key
 
 ```bash
-./bin/grok-search fetch --provider firecrawl https://example.com
+./bin/grok-search fetch --provider tavily https://example.com
 ./bin/grok-search fetch --provider direct https://example.com
 ./bin/grok-search map --provider direct https://example.com --limit 5
 ```
 
-第一条验证 Firecrawl Keyless；输出应含 `diagnostics.firecrawl_auth_mode: keyless`，`metadata.title` 非空，`diagnostics.run_path` 指向一份 `kind: "fetch"` 的运行记录。
-
-### X 原帖（keyless）
-
-```bash
-./bin/grok-search fetch https://x.com/xai/status/2087942296721559607
-./bin/grok-search fetch --provider firecrawl https://x.com/xai/status/2087942296721559607   # 约 30 credits
-```
-
-期望：第一条 `diagnostics.provider` 为 `direct`，`provider_attempts[0]` 带 `x_validated: true`，不消耗 Firecrawl credits；第二条 `credits_used >= 10` 且 `diagnostics.warnings` 里有成本提示，正文含 thread。
-
-### Firecrawl 冷却
-
-```bash
-cat > ~/.cache/grok-search/firecrawl-cooldown.json <<'EOF2'
-{"until":"2099-01-01T00:00:00.000Z","auth_mode":"keyless","reason":"credits","hit_at":"2026-09-08T00:00:00.000Z"}
-EOF2
-./bin/grok-search fetch https://example.com
-./bin/grok-search search "any query"
-./bin/grok-search fetch --provider firecrawl https://example.com
-rm -f ~/.cache/grok-search/firecrawl-cooldown.json
-```
-
-期望：前两条 provider attempts 里 Firecrawl 为 `skipped: true`、`error` 以 `cooldown until` 开头，fetch 落到 Direct，search 的 extra 为空并有 warning（无 Tavily 时）；第三条显式指定仍会真打，成功后冷却文件被删除。
+Tavily 测试需要配置 `TAVILY_API_KEY`；无 key 时 `--provider tavily` 会返回配置错误。Direct Fetch 和 Map 不需要 API key。
 
 ## Direct xAI
 
@@ -59,7 +36,7 @@ export GROK_MODEL="grok-4.3"
 - 默认 `responses_max_turns` 为 3；
 - `diagnostics.options.search_source` 为 `web`，且请求体只挂 `web_search`；
 - `sources.items` 可含 `citation` / `searched`，`sources.omitted` 标记裁剪；
-- 默认 `extra=0`，不会发起 Tavily/Firecrawl 请求；显式 `--extra N` 后，在 Grok 完成后再分配给可用 provider；
+- 默认 `extra=0`，不会发起 Tavily 请求；显式 `--extra N` 后，在 Grok 完成后请求 Tavily；
 - `sources.raw_path` 非空，文件含 `schema_version: 2`、`query`、`answer`、`sources.items`、`grok_tool_calls`；
 - `diagnostics.responses_tool_calls` 含 `upstream` / `trace` / `by_action`，`diagnostics.search_budget.enforced` 为 `false`。
 
@@ -132,28 +109,25 @@ export GROK_MODEL="x-ai/grok-4.1-fast"
 
 期望 tool 为 `openrouter:web_search`，模型名没有自动 `:online`。
 
-## Tavily + Firecrawl
+## Tavily extra
 
 ```bash
 export TAVILY_API_KEY="tvly-your-key"
 ./bin/grok-search search --extra 1 "latest pi coding agent docs"
 ./bin/grok-search search --extra 10 "latest pi coding agent docs"
-
-export FIRECRAWL_API_KEY="fc-your-key"
-./bin/grok-search search --extra 1 "latest pi coding agent docs"
 ```
 
-默认 `extra=6` 时应分配 Tavily 3 / Firecrawl 3。移除 Firecrawl key 后仍应成功，auth mode 变为 `keyless`。
+额外结果只来自 Tavily；请求失败时不会切换到其他搜索服务。
 
 ## Fetch 主备链
 
 ```bash
 ./bin/grok-search fetch https://example.com
-./bin/grok-search fetch --provider firecrawl https://example.com
+./bin/grok-search fetch --provider tavily https://example.com
 ./bin/grok-search fetch --provider direct https://example.com
 ```
 
-配置 Tavily 时顺序为 Tavily → Firecrawl → Direct；未配置 Tavily 时 Firecrawl Keyless → Direct。
+配置 Tavily 时顺序为 Tavily → Direct；未配置 Tavily 时直接使用 Direct。
 
 ## 输出安全
 

@@ -51,13 +51,13 @@ outside this Skill. Never read, print, commit, or copy those values. Read
 
 Query rules:
 
-- The query is a keyword string that Tavily/Firecrawl search verbatim, so keep it short. Everything else (fields wanted, language, "quote and date only, no advice, say if not found") goes in `--instructions`; only Grok sees it. A bag of keywords like `GPT Codex 1M 272k context window` makes Grok invent background; `codex context window` plus an instruction asking for the current limit does not.
-- No code-search operators (`repo:`, `path:`, `language:`). Scope with `--responses-allowed-domains`; it restricts Grok, Tavily, and Firecrawl alike, and off-domain leftovers rank last.
+- The query is a keyword string that Tavily searches verbatim, so keep it short. Everything else (fields wanted, language, "quote and date only, no advice, say if not found") goes in `--instructions`; only Grok sees it. A bag of keywords like `GPT Codex 1M 272k context window` makes Grok invent background; `codex context window` plus an instruction asking for the current limit does not.
+- No code-search operators (`repo:`, `path:`, `language:`). Scope with `--responses-allowed-domains`; it restricts Grok and Tavily alike, and off-domain leftovers rank last.
 - Budget about 2 searches per question. Before a second search, name the gap it closes. Do not carry the previous round's conclusion words into the keywords; for the same X handle, change the gap, not the phrasing.
 
 ## Search Source
 
-Default is web. `--source x` for what people are saying, a named account's posts, a thread, or a claim only circulating on X. `--source both` for a current event where reporting and reaction both matter. `--source x` cannot fall back to the web and turns Tavily/Firecrawl off (`--extra N` forces them).
+Default is web. `--source x` for what people are saying, a named account's posts, a thread, or a claim only circulating on X. `--source both` for a current event where reporting and reaction both matter. `--source x` cannot fall back to the web and turns Tavily off (`--extra N` forces it).
 
 - For "is it available now / current state" questions, start with `--x-from-date` 60–90 days back; widen only if empty. Old issues explain history, not the present.
 - X posts are personal statements: cite handle and date (both live in `answer.text`, not the card), keep claims separate from confirmations, confirm facts at the official source.
@@ -66,7 +66,7 @@ Default is web. `--source x` for what people are saying, a named account's posts
 
 ## Fetch Cost
 
-- X posts: `auto` tries Direct first (free, main post with date). `--provider firecrawl` only for the thread or replies; about 30 credits per post.
+- X posts: `auto` tries Direct first (free, main post with date), then Tavily and Direct fallback.
 - Fetch only evidence that would change the conclusion: one or two URLs per turn, a representative post or two for experience reports, never re-fetch text you have. Reddit and YouTube return shells from every provider.
 - When citing decisive evidence, record date, model version, client, and login method.
 
@@ -75,9 +75,9 @@ Default is web. `--source x` for what people are saying, a named account's posts
 Every script prints one JSON object, also on failure (non-zero exit, stderr line).
 
 - `error`: read `error.message`, `error.code`, `diagnostics.provider_attempts`. Change something before retrying (query, `--provider`, `--model`). `DEADLINE_EXCEEDED`: the whole command hit its time budget (default 240s, `--deadline N`).
-- `diagnostics.warnings` and `diagnostics.provider_attempts` say which providers were skipped (e.g. Firecrawl in cooldown), failed, or produced content, and whether the relay served another model than requested.
+- `diagnostics.warnings` and `diagnostics.provider_attempts` say which providers were skipped, failed, or produced content, and whether the relay served another model than requested.
 - Search: `answer.text`, then `sources.items` (merged, max 12). `source_type` `citation` = used in the answer, `searched` = only listed; `opened: true` = Grok read the page. `sources.raw_path` always points to the run record (full list, answer, tool calls); read it in chunks only when the cards are not enough. Check `diagnostics.degraded`, `cost_usd`, and `search_budget` (advisory budget vs. calls made).
 - Fetch: `content.text`; if `content.truncated`, read `content.full_path` in chunks or rerun once with a larger `--max-chars`. `metadata` has title/author/published_at when the provider had them. `diagnostics.run_path` is the run record.
 - Map: `urls`; fetch the few you need.
 
-Provider order, proxy, cooldown, config errors: `references/providers.md`. Multi-part or conflicting research: `references/planning.md` first.
+Provider order, proxy, config errors: `references/providers.md`. Multi-part or conflicting research: `references/planning.md` first.

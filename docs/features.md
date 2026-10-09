@@ -14,7 +14,7 @@
 ./bin/grok-search search --responses-openrouter-engine exa "latest official release notes"
 ```
 
-`--instructions` 把研究指令与检索关键词分开：query 由 Tavily / Firecrawl 原样检索，指令只追加到 Grok 的 user message 末尾。`--responses-allowed-domains` / `--responses-excluded-domains` 同时约束 Grok、Tavily、Firecrawl，域外 extra 降到最后一档。
+`--instructions` 把研究指令与检索关键词分开：query 由 Tavily 原样检索，指令只追加到 Grok 的 user message 末尾。`--responses-allowed-domains` / `--responses-excluded-domains` 同时约束 Grok 和 Tavily，域外 extra 降到最后一档。
 
 默认 Responses 参数：
 
@@ -50,9 +50,8 @@ Responses sources 与 extra sources 去重合并后写入 `sources.items`（默�
 默认不启动独立补充信源。显式配置非零 `--extra N` 后，Grok 请求完成才执行：
 
 - Tavily Advanced Search：仅在配置 `TAVILY_API_KEY` 时。
-- Firecrawl Search：默认 Keyless，配置 `FIRECRAWL_API_KEY` 后使用 API key。
 
-`--extra N` 是两家合计数量，默认 `0`。两家可用时 `N=6` 分为 3/3，`N=5` 分为 Tavily 3、Firecrawl 2。额外 provider 按顺序执行，某一路失败后不追加第二轮补齐请求。Firecrawl 处于额度冷却期时被跳过（attempt 记 `skipped: true`），名额转给 Tavily。`--source x` 下两家默认关闭（`extra_mode: off-x-only`），显式 `--extra N` 开启。
+`--extra N` 指定 Tavily 的额外结果数量，默认 `0`。额外结果在 Grok 请求完成后获取；`--source x` 下默认关闭（`extra_mode: off-x-only`），显式 `--extra N` 开启。
 
 这些来源不会注入 Grok，也不代表 Grok 使用过它们。
 
@@ -61,10 +60,10 @@ Responses sources 与 extra sources 去重合并后写入 `sources.items`（默�
 Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 
 - `answer.text` 开头有明显警告。
-- 回答正文是 Tavily/Firecrawl 原始标题、URL、摘要列表。
+- 回答正文是 Tavily 原始标题、URL、摘要列表。
 - `diagnostics.degraded=true`。
 - `diagnostics.grok_error.code=QUOTA_EXHAUSTED`（普通 429 限流为 `RATE_LIMITED`）。
-- `sources.items` 中只有 Tavily/Firecrawl 结果。
+- `sources.items` 中只有 Tavily 结果。
 
 `--no-extra` 会禁止这种接管。认证、协议、5xx 和超时错误也不会触发额度降级。
 
@@ -72,7 +71,7 @@ Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 
 ```bash
 ./bin/grok-search fetch https://example.com
-./bin/grok-search fetch --provider firecrawl https://example.com
+./bin/grok-search fetch --provider tavily https://example.com
 ./bin/grok-search fetch --provider direct https://example.com
 ./bin/grok-search fetch --max-chars 50000 https://example.com
 ```
@@ -80,12 +79,10 @@ Grok 明确额度耗尽且 extra sources 可用时，输出仍成功，但：
 `auto` provider 顺序：
 
 ```text
-Tavily Extract → Firecrawl Scrape → Direct Fetch
+Tavily Extract → Direct Fetch
 ```
 
-Firecrawl 无 key 时走 Keyless；带 key 时自动发送 Bearer token。当前模式写入 `diagnostics.firecrawl_auth_mode`。
-
-X 原帖在 `auto` 下不论 key 都先走 Direct（校验 handle、日期、正文；只有主帖）；要 thread、ISO 时间戳、互动数时显式 `--provider firecrawl`（约 30 credits）。单次 `credits_used >= 10` 会在 warnings 中说明成本。额度耗尽后进入冷却，auto 模式跳过 Firecrawl 直到 `retry_after_seconds` 到期。
+X 原帖在 `auto` 下先走 Direct 并校验 handle、日期和正文；失败后尝试 Tavily。完整 thread 和回复不在支持范围内。
 
 `metadata` 归一为 `{ title, description, author, published_at, language, status, source_url }`；运行记录路径在 `diagnostics.run_path`。
 
@@ -125,11 +122,9 @@ Direct Map 只检查 `/sitemap.xml` 和首页同域链接。
 | `GROK_X_IMAGE_UNDERSTANDING` | 分析 X 帖子图片，按 token 计费 |
 | `GROK_X_VIDEO_UNDERSTANDING` | 分析 X 帖子视频，按 token 计费 |
 | `GROK_RESPONSES_OPENROUTER_ENGINE` | OpenRouter search engine，默认 `auto` |
-| `GROK_DEFAULT_EXTRA` | Tavily/Firecrawl 合计默认数量，默认 `0`；非零值才启用额外信源 |
+| `GROK_DEFAULT_EXTRA` | Tavily 默认额外结果数量，默认 `0`；非零值才启用额外信源 |
 | `TAVILY_API_KEY` | Tavily Search/Extract/Map |
-| `FIRECRAWL_API_KEY` | 可选；提高 Firecrawl 限流并使用账户额度 |
 | `GROK_OUTPUT_DIR` | 完整输出与运行记录目录 |
-| `GROK_STATE_DIR` | 冷却状态目录，默认 `~/.cache/grok-search/` |
 | `GROK_RUN_LOG` | 默认开；`off` 关闭运行记录 |
 | `GROK_DEBUG_RAW` | `1` 时运行记录附带脱敏 Grok 原始响应 |
 | `GROK_PROXY` | 本工具专用代理 |

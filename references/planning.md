@@ -40,7 +40,7 @@ Skip planning when:
 
 ## Source Hygiene
 
-- Treat `search.js` extra sources (Tavily/Firecrawl) as leads, not citations. Grok did not read them; a card with `opened: true` was read, a plain `searched` card was only listed. Verify with `fetch.js` if accuracy matters.
+- Treat `search.js` Tavily extra sources as leads, not citations. Grok did not read them; a card with `opened: true` was read, a plain `searched` card was only listed. Verify with `fetch.js` if accuracy matters.
 - Treat Direct Fetch output as best-effort text extraction, not a full browser render. Tables, scripts, and JS-rendered regions may be missing.
 - Treat Direct Map output as candidate URLs only, not a complete sitemap.
 - On every result, scan `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.provider`, and `content.full_path` / `answer.full_path` before deciding whether another command is needed.

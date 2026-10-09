@@ -24,7 +24,7 @@ yarn-error.log*
 pnpm-debug.log*
 logs/
 
-# --- 环境 / 密钥（grok / tavily / firecrawl API key 别进库）---
+# --- 环境 / 密钥（grok / tavily API key 别进库）---
 .env
 .env.*
 *.local

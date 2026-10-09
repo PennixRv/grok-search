@@ -109,7 +109,7 @@ function sourceSnippet(source) {
 
 /**
  * Fill what the first record of a URL lacks from a later duplicate. A Grok citation arrives
- * as a bare URL with a marker title; the same page found by Tavily or Firecrawl has a title
+ * as a bare URL with a marker title; the same page found by Tavily has a title
  * and a description. Dropping the duplicate threw both away.
  */
 function mergeSourceFields(existing, incoming) {

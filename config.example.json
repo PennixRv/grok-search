@@ -20,9 +20,6 @@
   "deadlineSeconds": 240,
   "tavilyApiKey": "",
   "tavilyApiUrl": "https://api.tavily.com",
-  "firecrawlApiKey": "",
-  "firecrawlApiUrl": "https://api.firecrawl.dev/v2",
   "outputDir": "",
-  "stateDir": "",
   "runLog": true
 }

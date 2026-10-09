@@ -1,18 +1,15 @@
 /**
  * Provider orchestration: which service fetches or maps a URL, in what order, and how a
  * failure of one hands over to the next. The adapters live in their own modules
- * (`http.js`, `tavily.js`, `firecrawl.js`, `direct.js`); everything they export is re-exported
+ * (`http.js`, `tavily.js`, `direct.js`); everything they export is re-exported
  * here so callers keep a single import path.
  */
-import { activeFirecrawlCooldown, clearFirecrawlCooldown, cooldownSkipMessage } from "./cooldown.js";
 import { directFetch, directFirstForX, directMap, validateXPostContent } from "./direct.js";
-import { firecrawlAuthMode, firecrawlScrape } from "./firecrawl.js";
 import { parseXPostUrl } from "./sources.js";
 import { tavilyExtract, tavilyMap } from "./tavily.js";
 
 export { authHeaders, backoffMs, debugLog, redactSecrets, requestJson, retryAfterMs, upstreamMessage } from "./http.js";
 export { tavilyExtract, tavilyMap, tavilySearch } from "./tavily.js";
-export { firecrawlAuthMode, firecrawlMetadata, firecrawlScrape, firecrawlSearch, isFirecrawlQuotaError } from "./firecrawl.js";
 export {
   DIRECT_MAP_REQUEST_TIMEOUT_SECONDS,
   collapseRepeatedLines,
@@ -107,37 +104,13 @@ export async function fetchUrl(url, config, { provider = "auto" } = {}) {
     if (result.ok || provider === "tavily") return { ...result, tried };
   }
 
-  if (provider === "auto" || provider === "firecrawl") {
-    const authMode = firecrawlAuthMode(config);
-    // An explicit --provider firecrawl still makes the request: the user may have just added
-    // a key or topped up, and a success clears the stale cooldown.
-    const cooldown = provider === "auto" ? await activeFirecrawlCooldown(config, authMode) : null;
-    if (cooldown) {
-      tried.push({ provider: "firecrawl", ok: false, skipped: true, auth_mode: authMode, error: cooldownSkipMessage(cooldown) });
-    } else {
-      const result = await firecrawlScrape(url, config);
-      tried.push({
-        provider: result.provider,
-        ok: result.ok,
-        skipped: Boolean(result.skipped),
-        error: result.error,
-        auth_mode: result.auth_mode,
-        ...(result.requests == null ? {} : { requests: result.requests }),
-        ...(result.duration_ms == null ? {} : { duration_ms: result.duration_ms }),
-        ...(result.credits_used == null ? {} : { credits_used: result.credits_used }),
-      });
-      if (result.ok && provider === "firecrawl") await clearFirecrawlCooldown(config);
-      if (result.ok || provider === "firecrawl") return { ...result, tried };
-    }
-  }
-
   if (provider === "auto") {
     if (directFirst) {
       // Direct already ran for this X post. Its page did not validate, but with nothing else
       // available it is still better than an error; say so instead of fetching it again.
       if (directFirst.ok) {
         const failed = tried.find((attempt) => attempt.provider === "direct" && !attempt.ok);
-        const warning = `Direct 抓到的 X 页面未通过原帖校验（${failed?.error || "x_validation_failed"}），其他 provider 不可用，按原样返回；需要完整帖文或 thread 时用 --provider firecrawl。`;
+        const warning = `Direct 抓到的 X 页面未通过原帖校验（${failed?.error || "x_validation_failed"}），其他 provider 不可用，按原样返回。`;
         tried.push({ provider: "direct", ok: true, skipped: false, reused: true });
         return { ...directFirst, warnings: [...(directFirst.warnings || []), warning], tried };
       }

@@ -32,9 +32,6 @@ Not part of the scored benchmark. Both send real, billed requests and write one 
 plus a summary to `--out DIR` (default under `benchmarks/results/`, ignored by Git). Findings and
 decisions are kept in the local-only `.agent/` notes.
 
-- `provider-compare.mjs`: the same questions, URLs and sites through Grok, Tavily, Firecrawl and
-  Direct (`--part search|fetch|map|all`). Used on 2026-09-08 to decide X-post routing
-  (Direct first) and to turn extras off for `--source x`.
 - `tool-call-cap-experiment.mjs`: one web and one X query posted straight to the Responses
   endpoint with `max_tool_calls`, `parallel_tool_calls` and `max_turns` variants
   (`--only web|x --ids a,b --repeat N`). Result: `max_tool_calls` is ignored by api.x.ai and by

@@ -59,10 +59,7 @@ function parseErrorBody(text) {
   }
 }
 
-// Firecrawl puts the wait in the body (`retry_after_seconds`) rather than in a header.
-// Firecrawl's per-minute limiter (paid and free keys alike) sends no Retry-After header and no
-// retry_after_seconds field, only prose: "... please retry after 15s, resets at ...". Reading it
-// turns three wasted requests in four seconds into one honest stop.
+// Some upstream providers put the wait in the response body rather than in a header.
 const RETRY_AFTER_TEXT = /retry after\s+(\d+(?:\.\d+)?)\s*(ms|s|sec|seconds?|m|min|minutes?)\b/i;
 
 function bodyRetryAfterMs(body) {
@@ -89,7 +86,7 @@ export function upstreamMessage(body) {
 
 export function redactSecrets(text, config) {
   let out = String(text || "");
-  for (const secret of [config?.grokApiKey, config?.tavilyApiKey, config?.firecrawlApiKey]) {
+  for (const secret of [config?.grokApiKey, config?.tavilyApiKey]) {
     if (typeof secret !== "string" || secret.length < 4) continue;
     out = out.split(secret).join("***");
   }

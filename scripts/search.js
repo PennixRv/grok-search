@@ -8,12 +8,10 @@ import {
   usesWebSearch,
   usesXSearch,
 } from "./lib/config.js";
-import { activeFirecrawlCooldown, cooldownSkipMessage } from "./lib/cooldown.js";
 import { startDeadline } from "./lib/deadline.js";
 import { searchGrokResponses } from "./lib/grok-responses.js";
 import { cleanupOutputDir, previewText, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
 import { SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X } from "./lib/prompts.js";
-import { firecrawlAuthMode, firecrawlSearch } from "./lib/firecrawl.js";
 import { tavilySearch } from "./lib/tavily.js";
 import { assertProxyUsable, getProxyState } from "./lib/proxy.js";
 import { buildRawSourcesPayload, compactSources, isOffDomainExtra, mergeSources, selectSources } from "./lib/sources.js";
@@ -29,7 +27,7 @@ const GROK_FAILURE_LABELS = {
 function usage() {
   return `Usage: ./scripts/search.js [--source web|x|both] [--instructions TEXT] [--platform NAME] [--model MODEL] [--extra N|--no-extra] [--source-chars N] [--max-sources N] [--full-sources] [--max-chars N] [--deadline SECONDS] <query>
 
-Run a Responses-compatible Grok/OpenRouter search and return JSON with independent Tavily/Firecrawl sources.
+Run a Responses-compatible Grok/OpenRouter search and return JSON with independent Tavily sources.
 
 Cost:
   --responses-parallel-tool-calls false
@@ -38,7 +36,7 @@ Cost:
 
 Research instructions:
   --instructions TEXT  What Grok should return (fields, language, what to leave out). Only
-                       Grok sees it; Tavily/Firecrawl still search the plain query.
+                       Grok sees it; Tavily still searches the plain query.
 
 Search sources:
   --source web         Grok web_search only (default)
@@ -61,13 +59,12 @@ Environment:
                        Optional Responses max_turns; default 3
   GROK_RESPONSES_PARALLEL_TOOL_CALLS
                        Optional true|false; false makes Grok search one call per turn. Not sent unless set
-  GROK_DEFAULT_EXTRA   Optional total Tavily/Firecrawl source count; default 0
+  GROK_DEFAULT_EXTRA   Optional total Tavily source count; default 0
   GROK_SOURCE_CHARS    Optional source snippet size; default 400
   GROK_MAX_SOURCES     Optional cap on returned source cards; default 12
   GROK_DEADLINE_SECONDS
                        Optional whole-command deadline; default 240, 0 disables
-  TAVILY_API_KEY       Optional explicit extra source provider
-  FIRECRAWL_API_KEY    Optional Firecrawl key; keyless search works without it
+  TAVILY_API_KEY       Optional extra source provider key
   GROK_OUTPUT_DIR      Optional directory for full answer when preview is truncated
 `;
 }
@@ -387,30 +384,23 @@ function providerAttempt(result) {
   };
 }
 
-function extraAllocation(limit, config, { firecrawlAvailable = true } = {}) {
-  if (limit <= 0) return { tavily: 0, firecrawl: 0 };
-  if (!config.tavilyApiKey) return { tavily: 0, firecrawl: firecrawlAvailable ? limit : 0 };
-  if (!firecrawlAvailable) return { tavily: limit, firecrawl: 0 };
-  const tavily = Math.ceil(limit / 2);
-  return { tavily, firecrawl: limit - tavily };
+function extraAllocation(limit, config) {
+  return { tavily: limit > 0 && config.tavilyApiKey ? limit : 0 };
 }
 
 /**
- * Independent Tavily / Firecrawl searches. Domain filters are the same ones Grok's web_search
+ * Independent Tavily searches. Domain filters are the same ones Grok's web_search
  * gets: when the caller scopes a search to github.com, extras that wander off to blogs and
- * video sites only displace in-scope candidates. A Firecrawl quota cooldown hands its share to
- * Tavily when a key exists, otherwise the channel is skipped rather than re-failing.
+ * video sites only displace in-scope candidates.
  */
 async function extraSources(query, limit, config, filters = {}) {
   const warnings = [];
   const providerRaw = {};
   if (limit <= 0) {
-    return { sources: [], warnings, provider_attempts: [], provider_raw: providerRaw, allocation: { tavily: 0, firecrawl: 0 } };
+    return { sources: [], warnings, provider_attempts: [], provider_raw: providerRaw, allocation: { tavily: 0 } };
   }
 
-  const firecrawlMode = firecrawlAuthMode(config);
-  const cooldown = await activeFirecrawlCooldown(config, firecrawlMode);
-  const allocation = extraAllocation(limit, config, { firecrawlAvailable: !cooldown });
+  const allocation = extraAllocation(limit, config);
 
   // Timed per provider so the attempt says which side made the caller wait.
   const timed = async (job) => {
@@ -420,7 +410,6 @@ async function extraSources(query, limit, config, filters = {}) {
   };
   const results = [];
   if (allocation.tavily > 0) results.push(await timed(tavilySearch(query, allocation.tavily, config, filters)));
-  if (allocation.firecrawl > 0) results.push(await timed(firecrawlSearch(query, allocation.firecrawl, config, filters)));
   const sources = [];
   const providerAttempts = [];
 
@@ -436,10 +425,8 @@ async function extraSources(query, limit, config, filters = {}) {
     else warnings.push(`${result.provider} extra source search failed: ${result.error || "unknown error"}`);
   }
 
-  if (cooldown) {
-    const message = cooldownSkipMessage(cooldown);
-    providerAttempts.push({ provider: "firecrawl", ok: false, count: 0, skipped: true, auth_mode: firecrawlMode, error: message });
-    warnings.push(`firecrawl extra source search skipped: ${message}`);
+  if (limit > 0 && !config.tavilyApiKey) {
+    warnings.push("extra source search skipped: TAVILY_API_KEY 未配置");
   }
 
   return {
@@ -454,7 +441,7 @@ async function extraSources(query, limit, config, filters = {}) {
 function resolveExtra(args, config, searchSource) {
   if (args.extraMode === "off") return { limit: 0, mode: "off" };
   if (args.extraMode === "explicit") return { limit: args.extra, mode: "explicit" };
-  // Tavily and Firecrawl only search the web. On an X-only search their results are off-topic
+  // Tavily only searches the web. On an X-only search its results are off-topic
   // by construction (6 of 6 in the 2026-09-08 side-by-side) and still bill credits, so they
   // stay off unless the caller asks for them with --extra N.
   if (usesXSearch(searchSource) && !usesWebSearch(searchSource)) return { limit: 0, mode: "off-x-only" };
@@ -463,7 +450,7 @@ function resolveExtra(args, config, searchSource) {
 
 function extraModeWarnings(extraOptions) {
   if (extraOptions.mode !== "off-x-only") return [];
-  return ["extra sources skipped: --source x searches X only and Tavily/Firecrawl search the web; pass --extra N to include them."];
+  return ["extra sources skipped: --source x searches X only and Tavily searches the web; pass --extra N to include it."];
 }
 
 function dedupeFilterValues(values) {
@@ -815,7 +802,7 @@ function clipText(value, max = 800) {
 
 function degradedAnswer(sources, label) {
   const lines = [
-    `> ⚠️ Grok Responses ${label}。以下为 Tavily / Firecrawl 原始搜索结果，未经 Grok 综合生成。`,
+    `> ⚠️ Grok Responses ${label}。以下为 Tavily 原始搜索结果，未经 Grok 综合生成。`,
     "",
   ];
   const groups = new Map();
@@ -825,7 +812,7 @@ function degradedAnswer(sources, label) {
     groups.get(provider).push(source);
   }
   for (const [provider, items] of groups) {
-    lines.push(`## ${provider === "tavily" ? "Tavily" : provider === "firecrawl" ? "Firecrawl" : provider}`);
+    lines.push(`## ${provider === "tavily" ? "Tavily" : provider}`);
     lines.push("");
     for (const [index, source] of items.entries()) {
       const title = String(source.title || `Result ${index + 1}`).trim();
@@ -850,8 +837,7 @@ function failureDiagnostics(config, searchOptions, extraOptions, extra, error, {
       api_provider: config.apiProvider,
       extra: extraOptions.limit,
       extra_mode: extraOptions.mode,
-      extra_allocation: extra?.allocation || { tavily: 0, firecrawl: 0 },
-      firecrawl_auth_mode: extraOptions.limit > 0 ? firecrawlAuthMode(config) : null,
+      extra_allocation: extra?.allocation || { tavily: 0 },
       ...responsesDiagnosticOptions(searchOptions),
     },
   };
@@ -892,7 +878,7 @@ async function publicResult(args, config) {
           ? `Grok Responses ${labels.label}；--source x 下 extra sources 默认关闭（传 --extra N 可开启），无法降级`
           : extraOptions.limit <= 0
             ? `Grok Responses ${labels.label}；extra sources 已显式关闭，无法降级`
-            : `Grok Responses ${labels.label}，且 Tavily/Firecrawl 未返回可用结果`
+            : `Grok Responses ${labels.label}，且 Tavily 未返回可用结果`
       );
       error.code = labels.errorCode;
       error.diagnostics = failureDiagnostics(config, searchOptions, extraOptions, extra, grokResult.error, { failure });
@@ -907,7 +893,7 @@ async function publicResult(args, config) {
       sources: [],
       tool_calls: [],
       warnings: [
-        `Grok Responses 因${labels.label}不可用；当前 answer 仅包含 Tavily/Firecrawl 原始搜索结果，未经 Grok 综合生成。`,
+        `Grok Responses 因${labels.label}不可用；当前 answer 仅包含 Tavily 原始搜索结果，未经 Grok 综合生成。`,
       ],
       provider_attempts: [grokFailureAttempt(config, grokResult.error)],
       diagnostics: {},
@@ -957,11 +943,10 @@ async function publicResult(args, config) {
       extra: extraOptions.limit,
       extra_mode: extraOptions.mode,
       extra_allocation: extra.allocation,
-      // Domain filters are pushed to Tavily/Firecrawl as well; results that still fall
+      // Domain filters are pushed to Tavily as well; results that still fall
       // outside them are ranked last (see sources.js selectSources).
       extra_domain_filter:
         extraOptions.limit > 0 && (searchOptions.allowedDomains.length || searchOptions.excludedDomains.length) ? "pushed" : "none",
-      firecrawl_auth_mode: extraOptions.limit > 0 ? firecrawlAuthMode(config) : null,
       source_chars: sourceChars,
       max_sources: maxSources,
       max_chars: args.maxChars,
@@ -1069,12 +1054,12 @@ try {
     const output = errorOutput(error, "DEADLINE_EXCEEDED");
     const runPath = writeRunRecordSync(config, { kind: "search", label: args.query, record: errorRunRecord(config, args, output) });
     if (runPath) output.diagnostics.run_path = runPath;
-    printJson(output);
+    printJson(output, { config, kind: "search", provider: "deadline", label: args?.query || "deadline" });
     console.error(error.message);
     process.exit(1);
   });
   try {
-    printJson(await publicResult(args, config));
+    printJson(await publicResult(args, config), { config, kind: "search", provider: "result", label: args.query });
   } finally {
     stopDeadline();
   }
@@ -1085,7 +1070,7 @@ try {
     const runPath = await writeRunRecord(config, { kind: "search", label: args?.query || "error", record: errorRunRecord(config, args, output) });
     if (runPath) output.diagnostics.run_path = runPath;
   }
-  printJson(output);
+  printJson(output, { config, kind: "search", provider: "error", label: args?.query || "error" });
   console.error(error.message);
   process.exitCode = stage === "argument" ? 2 : 1;
 }

@@ -54,7 +54,7 @@ assert.deepEqual(
 // one, the description becomes the snippet, and the contributing provider is recorded.
 const mergedCitation = mergeSources(
   [{ provider: "grok-responses", source_type: "citation", url: "https://example.com/post", title: "1" }],
-  [{ provider: "firecrawl", url: "https://example.com/post/", title: "Great Post Title", description: "A useful description", score: 0.5 }]
+  [{ provider: "tavily", url: "https://example.com/post/", title: "Great Post Title", description: "A useful description", score: 0.5 }]
 );
 assert.deepEqual(mergedCitation, [
   {
@@ -64,7 +64,7 @@ assert.deepEqual(mergedCitation, [
     title: "Great Post Title",
     snippet: "A useful description",
     score: 0.5,
-    merged_from: ["firecrawl"],
+    merged_from: ["tavily"],
   },
 ]);
 // Existing real values are never overwritten, and an identical duplicate leaves no trace.
@@ -86,8 +86,8 @@ assert.equal(hostMatchesDomain("github.com", "github.com"), true);
 assert.equal(hostMatchesDomain("notgithub.com", "github.com"), false);
 assert.equal(hostMatchesDomain("raw.githubusercontent.com", "github.com"), false);
 const filters = { allowedDomains: ["github.com"], excludedDomains: [] };
-assert.equal(isOffDomainExtra({ provider: "firecrawl", url: "https://medium.com/p" }, filters), true);
-assert.equal(isOffDomainExtra({ provider: "firecrawl", url: "https://github.com/o/r" }, filters), false);
+assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://medium.com/p" }, filters), true);
+assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://github.com/o/r" }, filters), false);
 assert.equal(isOffDomainExtra({ provider: "grok-responses", source_type: "searched", url: "https://medium.com/p" }, filters), false);
 assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://reddit.com/r/x" }, { allowedDomains: [], excludedDomains: ["reddit.com"] }), true);
 assert.equal(isOffDomainExtra({ provider: "tavily", url: "https://medium.com/p" }, { allowedDomains: [], excludedDomains: [] }), false);
@@ -148,7 +148,7 @@ assert.deepEqual(selectSources([], { maxSources: 5 }), { items: [], total: 0, re
 
 // Full ranking: citation > opened > in-domain extra > searched > off-domain extra.
 const domainRanked = [
-  { url: "https://medium.com/off", provider: "firecrawl" },
+  { url: "https://medium.com/off", provider: "tavily" },
   { url: "https://github.com/searched", source_type: "searched" },
   { url: "https://github.com/opened", source_type: "searched", opened: true },
   { url: "https://gist.github.com/extra", provider: "tavily" },
