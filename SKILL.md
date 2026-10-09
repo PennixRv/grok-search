@@ -7,7 +7,7 @@ metadata:
 
 # Grok Search
 
-Use the installed `grok-search` command for normal calls (`grok-search search`, `grok-search fetch`, or `grok-search map`). The Pennix installer installs its local production dependency and exports the managed command through `~/.local/bin`; do not run global `npm` installs or create a provider wrapper. Before that managed link exists, invoke the executable from the Skill root or use its absolute path only for installation diagnostics.
+Use the installed `grok-search` command for normal calls (`grok-search search`, `grok-search fetch`, or `grok-search map`). The `pennix-workflow-lifecycle` Skill's catalog-defined `replace-staged` flow installs its local production dependency and exports the managed command through `~/.local/bin`; do not run global `npm` installs or create a provider wrapper. Before that managed link exists, invoke the executable from the Skill root or use its absolute path only for installation diagnostics.
 
 This executable is owned by `grok-search` and must be launched through the host's native
 direct command path. Do not start it with `mcp__fastctx.run`, a FastCtx job, `replace`, shell
