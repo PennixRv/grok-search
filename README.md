@@ -16,14 +16,17 @@
 
 ## 快速开始
 
-先安装依赖一次，然后通过统一入口运行：
+Pennix lifecycle 安装后，使用其受管 PATH 入口：
 
 ```bash
-npm install
-./bin/grok-search search "latest Node.js LTS"
-./bin/grok-search fetch https://example.com
-./bin/grok-search map https://docs.example.com --limit 20
+grok-search search "latest Node.js LTS"
+grok-search fetch https://example.com
+grok-search map https://docs.example.com --limit 20
 ```
+
+直接使用源码时先运行 `npm ci --omit=dev --ignore-scripts`，再用
+`./bin/grok-search`；这个文件路径也用于安装前诊断。lifecycle 拥有 PATH
+链接的创建、验证和卸载，不需要全局 npm 安装或另一份 wrapper。
 
 ## 在 pi 中使用（示例）
 

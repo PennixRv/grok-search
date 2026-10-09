@@ -16,14 +16,18 @@
 
 ## Quick Start
 
-Install dependencies once, then use the unified entrypoint from the project root:
+After a Pennix lifecycle installation, use its managed command on PATH:
 
 ```bash
-npm install
-./bin/grok-search search "latest Node.js LTS"
-./bin/grok-search fetch https://example.com
-./bin/grok-search map https://docs.example.com --limit 20
+grok-search search "latest Node.js LTS"
+grok-search fetch https://example.com
+grok-search map https://docs.example.com --limit 20
 ```
+
+For a source checkout, run `npm ci --omit=dev --ignore-scripts` once and invoke
+`./bin/grok-search`. The file path is also available for pre-install diagnosis.
+Lifecycle owns PATH link installation, verification and removal; no global npm
+installation or separate wrapper is needed.
 
 ## Use With pi (Example)
 
