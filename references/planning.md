@@ -1,51 +1,45 @@
-# Search Planning
+# 搜索规划
+复杂或高风险网络任务使用本参考。直接抓取已知 URL 和单次最新事实核对不需要规划。
 
-Use this reference for complex or high-stakes web tasks. Direct URL fetches and single-shot latest-fact checks do not need a plan.
+## 需要规划的情况
 
-## When To Plan
+- 问题包含多个独立部分。
+- 答案依赖可能变化的当前事实，例如法规、价格、发布或日程。
+- 来源可能冲突，需要协调。
+- 任务同时需要站点发现（map）和页面内容（fetch）。
 
-Plan first when any of these apply:
+以下情况跳过规划：
 
-- The question has multiple independent parts.
-- The answer depends on current facts that may have moved (regulations, prices, releases, schedules).
-- Sources may disagree and you have to reconcile them.
-- The task needs both site discovery (map) and page content (fetch).
+- 用户给出 URL 并询问其内容：直接使用 `fetch.js`。
+- 单次搜索可以回答：直接使用 `search.js`。
+- 用户只要已知文档指向：使用已有知识或一次 fetch。
 
-Skip planning when:
+## 最小流程
 
-- The user gave a URL and asked what is on it — go straight to `fetch.js`.
-- A single search query can answer it — go straight to `search.js`.
-- The user wants a pointer to a known doc — answer from memory or one fetch.
+1. 用一句具体句子重述信息需求；无法重述时先询问用户。
+2. 只有一条查询无法覆盖时才拆分独立子问题。
+3. 按已知信息为每个子问题选择成本最低的脚本：已知 URL 用 `fetch.js`；已知站点但未知 URL 用 `map.js` 后对选定页面 `fetch.js`；都未知或问题是“当前是什么”用 `search.js`。
+4. 使用能回答问题的最少命令；独立命令并行运行，不串行执行。
+5. 准确性重要时优先一手或官方来源，如供应商文档、标准组织、发布说明和官方变更记录。
+6. 来源冲突时分别抓取一手页面，把冲突呈现给用户，不静默选择一方。
 
-## Minimal Workflow
+## 时间线问题
 
-1. Restate the information need in one concrete sentence. If you cannot, ask the user before searching.
-2. Split into independent sub-questions only when one query cannot cover them.
-3. Pick the cheapest script per sub-question by what is already known:
-   - URL known → `fetch.js`.
-   - Site known, URL not → `map.js`, then `fetch.js` on the chosen URL.
-   - Neither known, or the question is "what is current" → `search.js`.
-4. Run the fewest commands that can answer the question. Run independent commands in parallel, not sequentially.
-5. Prefer primary or official sources when accuracy matters (vendor docs, standards bodies, release notes, official changelogs).
-6. If results conflict, fetch each primary page and surface the conflict to the user instead of silently picking a side.
+“现在可用吗”“默认是否改变”“还会失败吗”的答案都有日期，不同日期的来源是顺序，不必视为同一时刻的冲突。
 
-## Timeline Questions
+- 先检索近期窗口（X 使用 `--x-from-date` 回溯 60–90 天；web 关键词加入当月或版本），为空时才扩大。
+- 旧资料用于解释变化过程，不用于描述当前状态。
+- 冲突时写出双方日期及发言者（账号或机构），说明哪条更新，并保留协调过程。
+- 重要引文在存在时附日期、模型或产品版本、客户端和登录方式。许多表面冲突来自不同设置。
 
-"Is it available now", "did they change the default", "does this still fail": the answer has a date, and sources from different dates are not in conflict, they are in sequence.
+## 来源卫生
 
-- Search the recent window first (`--x-from-date` 60–90 days back for X; add the current month or version to web keywords). Widen only when the recent window is empty.
-- Use older material to explain how things got here, never to describe the present. An issue closed in March does not say what shipped in August.
-- When two sources disagree, write both with their dates and who said them (handle or organization), say which is newer, and leave the reconciliation visible to the user instead of picking one.
-- Tag each decisive quote with date, model or product version, client, and login method when those exist. A large share of apparent contradictions are two different setups.
+- search.js 的 Tavily extra 是线索，不是引用；Grok 没有读取它们。只有 `opened: true` 表示页面被读取；仅 `searched` 表示只列出。重要事实使用 `fetch.js` 核验。
+- Direct Fetch 是尽力而为的文本提取，不是完整浏览器渲染；表格、脚本和 JavaScript 渲染区可能缺失。
+- Direct Map 只提供候选 URL，不是完整站点地图。
+- 每个结果都检查 `diagnostics.warnings`、`diagnostics.provider_attempts`、`diagnostics.provider` 和 `content.full_path` 或 `answer.full_path`，再决定是否需要下一条命令。
+- 两个来源都看起来权威且不一致时，分别抓取、引用相关行并报告冲突。
 
-## Source Hygiene
+## 停止条件
 
-- Treat `search.js` Tavily extra sources as leads, not citations. Grok did not read them; a card with `opened: true` was read, a plain `searched` card was only listed. Verify with `fetch.js` if accuracy matters.
-- Treat Direct Fetch output as best-effort text extraction, not a full browser render. Tables, scripts, and JS-rendered regions may be missing.
-- Treat Direct Map output as candidate URLs only, not a complete sitemap.
-- On every result, scan `diagnostics.warnings`, `diagnostics.provider_attempts`, `diagnostics.provider`, and `content.full_path` / `answer.full_path` before deciding whether another command is needed.
-- If two sources disagree and both look authoritative, fetch each, quote the relevant lines, and report the conflict.
-
-## Stop Conditions
-
-Stop as soon as the evidence answers the user. Every extra command should either reduce a specific uncertainty or supply a source the current result lacks. If you are about to run another command "just to be thorough" without a named gap to close, stop and answer. If two queries have already covered the same gap, a third phrasing will not close it: fetch the best URL you have or report the gap.
+证据回答问题后立即停止。每条额外命令都必须减少具体不确定性或补充当前结果缺少的来源。若只是想“更全面”而说不出要关闭的缺口，就停止并回答。两个查询已经覆盖同一缺口时，第三种措辞不会解决它：抓取已有最佳 URL，或报告仍存缺口。
