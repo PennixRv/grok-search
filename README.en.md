@@ -19,7 +19,7 @@
 After a Pennix lifecycle installation, use its managed command on PATH:
 
 ```bash
-grok-search search "latest Node.js LTS"
+grok-search search --no-extra "latest Node.js LTS"
 grok-search fetch https://example.com
 grok-search map https://docs.example.com --limit 20
 ```
@@ -36,7 +36,7 @@ Clone or copy this directory into your pi skills location, then enable the skill
 The commands use the unified entrypoint:
 
 ```bash
-./bin/grok-search search "latest Node.js LTS"
+./bin/grok-search search --no-extra "latest Node.js LTS"
 ./bin/grok-search fetch https://example.com
 ./bin/grok-search map https://docs.example.com --limit 20
 ```
@@ -51,7 +51,7 @@ Other agent harnesses can use the same pattern: read `SKILL.md`, then run `bin/g
 - [Smoke tests](docs/smoke-tests.md)
 - [Public benchmark](docs/benchmark.md)
 - [Evaluation methodology research](docs/web-search-evaluation-research.md)
-- Agent-facing: [SKILL.md](SKILL.md) (read every turn, kept under 5k chars) plus the on-demand [references/x-search.md](references/x-search.md), [references/providers.md](references/providers.md), and [references/planning.md](references/planning.md)
+- Agent-facing: [SKILL.md](SKILL.md) (read when loading this Skill) plus the on-demand [references/x-search.md](references/x-search.md), [references/providers.md](references/providers.md), and [references/planning.md](references/planning.md)
 
 ## Configuration
 
@@ -211,19 +211,21 @@ On success, provider attempts, warnings, timestamps, and command options live un
 
 ## Search
 
+Pennix normal calls explicitly use `--no-extra`; the `--extra N` example below requires the user's current explicit request or approval for additional sources.
+
 ```bash
-./bin/grok-search search "What changed in the latest Node.js LTS?"
-./bin/grok-search search --instructions "Quote the official changelog with dates; say so if not found" "node lts changelog"
-./bin/grok-search search --platform GitHub "pi coding agent search skill"
-./bin/grok-search search --responses-allowed-domains github.com "pi coding agent search skill"
+./bin/grok-search search --no-extra "What changed in the latest Node.js LTS?"
+./bin/grok-search search --no-extra --instructions "Quote the official changelog with dates; say so if not found" "node lts changelog"
+./bin/grok-search search --no-extra --platform GitHub "pi coding agent search skill"
+./bin/grok-search search --no-extra --responses-allowed-domains github.com "pi coding agent search skill"
 ./bin/grok-search search --extra 10 "latest pi coding agent docs"
 ./bin/grok-search search --no-extra "query"
-./bin/grok-search search --source-chars 200 "query"
-./bin/grok-search search --max-sources 8 "query"
-./bin/grok-search search --deadline 120 "query"
-./bin/grok-search search --full-sources "debug provider raw"
-./bin/grok-search search --responses-openrouter-engine exa "strict web-only query"
-./bin/grok-search search --source x --responses-parallel-tool-calls false "query"   # one tool call per turn, cheaper
+./bin/grok-search search --no-extra --source-chars 200 "query"
+./bin/grok-search search --no-extra --max-sources 8 "query"
+./bin/grok-search search --no-extra --deadline 120 "query"
+./bin/grok-search search --no-extra --full-sources "debug provider raw"
+./bin/grok-search search --no-extra --responses-openrouter-engine exa "strict web-only query"
+./bin/grok-search search --no-extra --source x --responses-parallel-tool-calls false "query"   # one tool call per turn, cheaper
 ```
 
 `--instructions TEXT` separates "what to return" from "what to search". The query is the keyword string sent to Tavily verbatim; the instructions are appended to the user message sent to Grok only (the system-prompt prefix is unchanged, so prompt caching is unaffected). With instructions present the query gets a `# Search query` header, otherwise a short query can be read as a stray line of the time context (Grok answered "no topic was specified" in a 2026-09-08 test). `diagnostics.options.instructions_chars` records the length and the run record stores the text; there is no config default.
@@ -235,11 +237,11 @@ On success, provider attempts, warnings, timestamps, and command options live un
 `--source` selects which Grok server-side tools are attached. The default is `web`:
 
 ```bash
-./bin/grok-search search --source x "what is X saying about grok-4.6"   # X only
-./bin/grok-search search --source both "reaction to the grok-4.6 release" # Grok routes
-./bin/grok-search search --source x --responses-allowed-x-handles xai,OpenAI "query"
-./bin/grok-search search --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
-./bin/grok-search search --source x --x-images "query"                  # analyze post images
+./bin/grok-search search --no-extra --source x "what is X saying about grok-4.6"   # X only
+./bin/grok-search search --no-extra --source both "reaction to the grok-4.6 release" # Grok routes
+./bin/grok-search search --no-extra --source x --responses-allowed-x-handles xai,OpenAI "query"
+./bin/grok-search search --no-extra --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./bin/grok-search search --no-extra --source x --x-images "query"                  # analyze post images
 ```
 
 - `x_search` supports handle allow/deny lists (mutually exclusive, max 20 each), `--x-from-date` / `--x-to-date` (`YYYY-MM-DD`), and `--x-images` / `--x-videos` (off by default, billed as extra tokens; `--no-x-images` / `--no-x-videos` turn off what the config enabled).
@@ -281,7 +283,7 @@ By default the command starts Grok Responses only. With an explicit `--extra N`,
 
 When Grok explicitly reports exhausted quota (402, a quota error code, or a 429 whose body mentions quota / credits / billing) and Tavily has results, the command returns a degraded success with `diagnostics.degraded: true` and `grok_error.code: QUOTA_EXHAUSTED`. A plain 429 degrades the same way with `RATE_LIMITED`. The visible answer states that it contains raw Tavily results, while `diagnostics.grok_error` preserves the redacted upstream error. Authentication, protocol, and generic service failures do not trigger this fallback.
 
-General retry rule: 408 / 429 / 5xx retry up to 3 times. A `Retry-After` header within the retry budget is honored; one beyond the budget stops retrying instead of being clamped. Bad JSON and 4xx responses such as 403 are requested once. Provider attempts carry `requests` (HTTP calls made) and `duration_ms`.
+Retry-enabled paths make bounded attempts for retryable failures such as 408, 429, 500, 502, 503 and 504. The default three attempts include the initial request, so there are at most two retries. A `Retry-After` header within the retry budget is honored; one beyond the budget stops retrying instead of being clamped. Bad JSON and non-retryable responses such as 403 stop immediately; timeout handling remains provider-specific. This is internal to one CLI command and does not authorize the agent to restart commands or switch providers. Provider attempts carry `requests` (HTTP calls made) and `duration_ms`.
 
 Source cards intentionally do not include long `description` or `content` fields. They use short `snippet` fields, with full raw data available through `sources.raw_path`.
 
@@ -371,7 +373,7 @@ Search requires Grok configuration:
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-./bin/grok-search search "What changed in the latest Node.js LTS?"
+./bin/grok-search search --no-extra "What changed in the latest Node.js LTS?"
 ```
 
 ## Common Errors

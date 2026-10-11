@@ -19,7 +19,7 @@
 Pennix lifecycle 安装后，使用其受管 PATH 入口：
 
 ```bash
-grok-search search "latest Node.js LTS"
+grok-search search --no-extra "latest Node.js LTS"
 grok-search fetch https://example.com
 grok-search map https://docs.example.com --limit 20
 ```
@@ -35,7 +35,7 @@ grok-search map https://docs.example.com --limit 20
 示例命令通过统一入口分发到对应操作：
 
 ```bash
-./bin/grok-search search "latest Node.js LTS"
+./bin/grok-search search --no-extra "latest Node.js LTS"
 ./bin/grok-search fetch https://example.com
 ./bin/grok-search map https://docs.example.com --limit 20
 ```
@@ -50,7 +50,7 @@ grok-search map https://docs.example.com --limit 20
 - [Smoke Tests](docs/smoke-tests.md)
 - [公开 Benchmark](docs/benchmark.md)
 - [评测方法研究](docs/web-search-evaluation-research.md)
-- Agent 侧说明：[SKILL.md](SKILL.md)（每轮都读，≤5k 字）与按需阅读的 [references/x-search.md](references/x-search.md)、[references/providers.md](references/providers.md)、[references/planning.md](references/planning.md)
+- Agent 侧说明：[SKILL.md](SKILL.md)（加载本 Skill 时读取）与按需阅读的 [references/x-search.md](references/x-search.md)、[references/providers.md](references/providers.md)、[references/planning.md](references/planning.md)
 
 ## 配置
 
@@ -207,19 +207,21 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 
 ## Search
 
+Pennix 普通调用显式使用 `--no-extra`；下面的 `--extra N` 示例只适用于用户当前明确要求或批准额外来源。
+
 ```bash
-./bin/grok-search search "What changed in the latest Node.js LTS?"
-./bin/grok-search search --instructions "只要官方 changelog 的原文和日期，找不到就说" "node lts changelog"
-./bin/grok-search search --platform GitHub "pi coding agent search skill"
-./bin/grok-search search --responses-allowed-domains github.com "pi coding agent search skill"
+./bin/grok-search search --no-extra "What changed in the latest Node.js LTS?"
+./bin/grok-search search --no-extra --instructions "只要官方 changelog 的原文和日期，找不到就说" "node lts changelog"
+./bin/grok-search search --no-extra --platform GitHub "pi coding agent search skill"
+./bin/grok-search search --no-extra --responses-allowed-domains github.com "pi coding agent search skill"
 ./bin/grok-search search --extra 10 "latest pi coding agent docs"
 ./bin/grok-search search --no-extra "query"
-./bin/grok-search search --source-chars 200 "query"
-./bin/grok-search search --max-sources 8 "query"
-./bin/grok-search search --deadline 120 "query"
-./bin/grok-search search --full-sources "debug provider raw"
-./bin/grok-search search --responses-openrouter-engine exa "strict web-only query"
-./bin/grok-search search --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
+./bin/grok-search search --no-extra --source-chars 200 "query"
+./bin/grok-search search --no-extra --max-sources 8 "query"
+./bin/grok-search search --no-extra --deadline 120 "query"
+./bin/grok-search search --no-extra --full-sources "debug provider raw"
+./bin/grok-search search --no-extra --responses-openrouter-engine exa "strict web-only query"
+./bin/grok-search search --no-extra --source x --responses-parallel-tool-calls false "query"   # 每 turn 一次工具调用，省费用
 ```
 
 `--instructions TEXT` 把"要什么"和"搜什么"分开：query 是 Tavily 原样检索的关键词，指令只追加到发给 Grok 的 user message 末尾（system prompt 前缀不变，prompt cache 不受影响）；带指令时 query 前会加一行 `# Search query` 标题，否则短 query 会被当成时间上下文的一行而丢失（2026-09-08 实测 Grok 回答"未指定主题"）。`diagnostics.options.instructions_chars` 记录长度，运行记录保存全文；没有配置项默认值。
@@ -231,11 +233,11 @@ OpenRouter 使用 `openrouter:web_search` server tool，不会给模型名追加
 `--source` 选择挂载哪些 Grok 服务端工具，默认 `web`：
 
 ```bash
-./bin/grok-search search --source x "X 上怎么评价 grok-4.6"          # 只查 X
-./bin/grok-search search --source both "grok-4.6 发布后的反响"        # Grok 自行路由
-./bin/grok-search search --source x --responses-allowed-x-handles xai,OpenAI "query"
-./bin/grok-search search --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
-./bin/grok-search search --source x --x-images "query"               # 分析帖子中的图片
+./bin/grok-search search --no-extra --source x "X 上怎么评价 grok-4.6"          # 只查 X
+./bin/grok-search search --no-extra --source both "grok-4.6 发布后的反响"        # Grok 自行路由
+./bin/grok-search search --no-extra --source x --responses-allowed-x-handles xai,OpenAI "query"
+./bin/grok-search search --no-extra --source x --x-from-date 2026-08-01 --x-to-date 2026-08-16 "query"
+./bin/grok-search search --no-extra --source x --x-images "query"               # 分析帖子中的图片
 ```
 
 - `x_search` 支持 handle allow/deny（互斥，各上限 20）、`--x-from-date` / `--x-to-date`（`YYYY-MM-DD`）、`--x-images` / `--x-videos`（默认关闭，按 token 额外计费；`--no-x-images` / `--no-x-videos` 可关掉配置里打开的开关）。
@@ -277,7 +279,7 @@ X citation 只返回裸 URL、且 `title` 是 inline citation 序号，因此 so
 
 当 Grok 明确返回额度耗尽（402、额度类错误码、正文提到 quota / credits / billing 的 429），而 Tavily extra 可用时，命令会返回标记为 `diagnostics.degraded: true` 的降级结果，`grok_error.code` 为 `QUOTA_EXHAUSTED`；普通 429 限流同样降级，但 code 是 `RATE_LIMITED`。`answer.text` 会明确说明当前仅为 Tavily 原始搜索结果，`diagnostics.grok_error` 保留脱敏后的上游错误。其他认证、协议或服务错误不会被伪装成降级。
 
-通用重试规则：408 / 429 / 5xx 最多重试 3 次，`Retry-After` 在重试预算内照等，超出预算即停止而不是截短后继续；坏 JSON、403 等 4xx 和超时按 provider 规则处理。provider attempt 带 `requests`（实际 HTTP 次数）与 `duration_ms`。
+启用 retry 的路径对 408、429、500、502、503、504 等可重试失败进行有限尝试；默认三次包含首次请求，最多重试两次。`Retry-After` 在重试预算内照等，超出预算即停止而不是截短后继续；坏 JSON、403 等不可重试失败和超时按 provider 规则处理。这是单条 CLI 内部行为，不授权代理重起命令或切换服务商。provider attempt 带 `requests`（实际 HTTP 次数）与 `duration_ms`。
 
 Source card 不再输出长 `description` 或 `content` 字段，只输出短 `snippet`。完整 raw 数据可通过 `sources.raw_path` 按需读取。
 
@@ -367,7 +369,7 @@ node tests/argv.test.js
 ```bash
 export GROK_API_URL="https://your-openai-compatible-endpoint/v1"
 export GROK_API_KEY="your-key"
-./bin/grok-search search "What changed in the latest Node.js LTS?"
+./bin/grok-search search --no-extra "What changed in the latest Node.js LTS?"
 ```
 
 ## 常见错误
