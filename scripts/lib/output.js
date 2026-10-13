@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, opendir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { redactSecrets } from "./http.js";
 import {
@@ -54,27 +54,40 @@ export async function cleanupOutputDir(config) {
 
 export async function maintainOutputDir(config, { execute = false } = {}) {
   const outputDir = config?.outputDir;
-  if (!outputDir) return { removed: 0, releasedBytes: 0, blocked: false };
+  const report = { files: 0, bytes: 0, candidates: [], estimatedBytes: 0, removed: 0, releasedBytes: 0, skipped: [], failed: [], blocked: false };
+  if (!outputDir) return report;
 
   try {
-    await mkdir(outputDir, { recursive: true, mode: 0o700 });
-    const entries = await readdir(outputDir, { withFileTypes: true });
-    const owned = entries.filter((entry) => entry.isFile() && entry.name.startsWith(OUTPUT_PREFIX));
-    if (owned.length > MAX_MAINTENANCE_ENTRIES) {
-      debug(config, `output cleanup skipped: ${owned.length} owned files exceed the bounded scan limit`);
-      return { removed: 0, releasedBytes: 0, blocked: true };
-    }
+    const rootStat = await lstat(outputDir);
+    if (!rootStat.isDirectory()) throw new Error("output directory is not a regular directory");
     const now = Date.now();
     const cutoff = now - (config.outputRetentionDays || DEFAULT_OUTPUT_RETENTION_DAYS) * 24 * 60 * 60 * 1000;
     const activeCutoff = now - ACTIVE_OUTPUT_GRACE_MS;
     const files = [];
-    for (const entry of owned) {
+    let scanned = 0;
+    const directory = await opendir(outputDir);
+    for await (const entry of directory) {
+      if (++scanned > MAX_MAINTENANCE_ENTRIES || Date.now() - now > 5000) {
+        report.blocked = true;
+        report.reason = "scan limit exceeded";
+        return report;
+      }
+      if (!entry.name.startsWith(OUTPUT_PREFIX)) continue;
+      if (!entry.isFile() || entry.name.includes(".tmp-")) {
+        report.skipped.push({ name: entry.name, reason: "non-regular or temporary file" });
+        continue;
+      }
       const fullPath = path.join(outputDir, entry.name);
       try {
-        const fileStat = await stat(fullPath);
-        files.push({ path: fullPath, mtimeMs: fileStat.mtimeMs, bytes: fileStat.size });
+        const fileStat = await lstat(fullPath);
+        if (!fileStat.isFile()) {
+          report.skipped.push({ name: entry.name, reason: "non-regular file" });
+          continue;
+        }
+        files.push({ name: entry.name, path: fullPath, mtimeMs: fileStat.mtimeMs, bytes: fileStat.size, ino: fileStat.ino });
+        if (fileStat.mtimeMs >= activeCutoff) report.skipped.push({ name: entry.name, reason: "active grace period" });
       } catch (error) {
-        debug(config, `output cleanup skipped ${entry.name}: ${error.message}`);
+        report.skipped.push({ name: entry.name, reason: error.code || error.message });
       }
     }
     const maxBytes = config.outputMaxBytes || DEFAULT_OUTPUT_MAX_BYTES;
@@ -84,6 +97,8 @@ export async function maintainOutputDir(config, { execute = false } = {}) {
       .sort((left, right) => left.mtimeMs - right.mtimeMs);
     let totalBytes = files.reduce((total, file) => total + file.bytes, 0);
     let totalFiles = files.length;
+    report.files = totalFiles;
+    report.bytes = totalBytes;
     const candidates = [];
     for (const file of eligible) {
       if (file.mtimeMs < cutoff || totalBytes > maxBytes || totalFiles > maxFiles) {
@@ -92,26 +107,30 @@ export async function maintainOutputDir(config, { execute = false } = {}) {
         totalFiles--;
       }
     }
-    let removed = 0;
-    let releasedBytes = 0;
+    report.candidates = candidates.map(({ name, bytes }) => ({ name, bytes }));
+    report.estimatedBytes = candidates.reduce((total, file) => total + file.bytes, 0);
     for (const file of candidates) {
       if (execute) {
         try {
-          await unlink(file.path);
-        } catch (error) {
-          if (error.code !== "ENOENT") {
-            debug(config, `output cleanup skipped ${path.basename(file.path)}: ${error.message}`);
+          const current = await lstat(file.path);
+          if (!current.isFile() || current.ino !== file.ino || current.size !== file.bytes || current.mtimeMs !== file.mtimeMs) {
+            report.skipped.push({ name: file.name, reason: "changed after selection" });
             continue;
           }
+          await unlink(file.path);
+          report.removed++;
+          report.releasedBytes += file.bytes;
+        } catch (error) {
+          const results = error.code === "ENOENT" ? report.skipped : report.failed;
+          results.push({ name: file.name, reason: error.code || error.message });
         }
       }
-      removed++;
-      releasedBytes += file.bytes;
     }
-    return { removed, releasedBytes, blocked: false };
+    return report;
   } catch (error) {
+    if (error.code === "ENOENT") return report;
     debug(config, `output cleanup skipped: ${error.message}`);
-    return { removed: 0, releasedBytes: 0, blocked: true };
+    return { ...report, blocked: true, reason: error.code || error.message };
   }
 }
 

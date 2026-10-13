@@ -116,7 +116,7 @@ chmod 600 ~/.config/grok-search/config.json
 - 优先级为 命令行 > 环境变量 > 配置文件 > 默认值。注意配置文件由你书写、命令行参数由调用本工具的 agent 书写：标量配置（如 `searchSource`）是**默认值**，agent 可以覆盖，实际生效值见 `diagnostics.options`；但配置里的**限制**不会被静默抹掉——allow-list 与 deny-list 都是限制，命令行只能收紧不能放宽。越界报 `RESPONSES_FILTER_FORBIDDEN`，把 allow-list 减空报 `RESPONSES_FILTER_EMPTY`，两个 deny-list 合并而非替换。规则见 [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级)。
 - `responsesOpenRouterEngine` 可选 `auto`、`native`、`exa`、`parallel` 或 `perplexity`，仅在 `apiProvider` 为 `openrouter` 时生效。
 - `tavilyApiKey` 可留空；`outputDir` 留空时使用默认目录 `~/.cache/grok-search/outputs/`；`runLog: false` 关闭每次调用的运行记录落盘。
-- 输出维护默认保留 30 天、最多 1 GiB 和 4096 个自有文件；可用 `GROK_OUTPUT_RETENTION_DAYS`、`GROK_OUTPUT_MAX_BYTES`、`GROK_OUTPUT_MAX_FILES` 或同名配置键调整。`grok-search prune` 默认只预览，`--yes` 才执行 owner 维护；活动写入和超过有界扫描上限的目录会闭锁。
+- 输出维护默认保留 30 天、最多 1 GiB 和 4096 个自有文件；可用 `GROK_OUTPUT_RETENTION_DAYS`、`GROK_OUTPUT_MAX_BYTES`、`GROK_OUTPUT_MAX_FILES` 或同名配置键调整。`grok-search prune` 默认只读预览，`--yes` 才执行 owner 维护；最多流式扫描 8192 个直接条目或 5 秒，超限整批闭锁。临时文件、符号链接和最近 60 秒写入的文件保留；删除前复核身份、大小和时间，状态变化则跳过。回执区分候选与预估量、成功删除与释放文件字节、跳过和失败；不将失败或已消失文件计入释放量。
 
 如果使用 OpenRouter，核心字段可改为：
 
