@@ -6,6 +6,8 @@ metadata:
 ---
 # Grok Search
 
+输出目录维护使用同一 owner 的 `grok-search prune`，不通过 shell 删除输出文件。
+
 普通调用使用已安装的 `grok-search` 命令（`grok-search search`、`grok-search fetch` 或 `grok-search map`）。`$pennix-component-lifecycle` 的 `replace-staged` 流程会安装本地生产依赖，并通过 `~/.local/bin` 提供受管命令；不要使用全局 `npm` 安装或创建服务商包装器。在受管链接建立前，只在安装诊断中从 Skill 根目录或绝对路径调用可执行文件。
 
 该可执行文件属于 `grok-search`，必须通过宿主原生直接命令路径启动。不要用 `mcp__fastctx.run`、FastCtx 任务、`replace`、Shell HTTP 或通用包装器启动；FastCtx 不是 Grok 传输、服务商、凭据或后备入口。Grok 调用完成后，FastCtx 可以读取已批准的普通结果文件做限定分析，但不得据此重试、轮询或改变 Grok 状态。
@@ -16,6 +18,8 @@ metadata:
 - 指定网站但不知道 URL → `grok-search map URL`，再对选定 URL 使用 `grok-search fetch`。
 - 要求当前或最新信息，或不知道 URL → `grok-search search`。
 - 本地仓库或主机问题 → 使用宿主本地检查和批准的代码搜索工具；本 Skill 只用于外部事实或解释本地结果。
+
+需要盘点或清理输出时，先运行 `grok-search prune` 取得 dry-run 报告；只有得到明确授权后才加 `--yes`。它遵守 30 天保留期、1 GiB 总字节数、4096 个文件和活动写入保护；扫描超过 8192 个自有输出文件时闭锁，不猜测删除。
 
 使用能回答问题的最少命令；独立子问题并行运行。不要串联 map → fetch → search。
 

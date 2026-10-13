@@ -1,10 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { redactSecrets } from "./http.js";
+import {
+  DEFAULT_OUTPUT_MAX_BYTES,
+  DEFAULT_OUTPUT_MAX_FILES,
+  DEFAULT_OUTPUT_RETENTION_DAYS,
+} from "./config.js";
 
 const OUTPUT_PREFIX = "grok-search-";
+const MAX_MAINTENANCE_ENTRIES = 8192;
+const ACTIVE_OUTPUT_GRACE_MS = 60 * 1000;
 export const RUN_RECORD_SCHEMA_VERSION = 2;
 export const MAX_SERIALIZED_OUTPUT_BYTES = 45 * 1024;
 
@@ -42,24 +49,93 @@ function extensionFor(value) {
 }
 
 export async function cleanupOutputDir(config) {
+  await maintainOutputDir(config, { execute: true });
+}
+
+export async function maintainOutputDir(config, { execute = false } = {}) {
   const outputDir = config?.outputDir;
-  if (!outputDir) return;
+  if (!outputDir) return { removed: 0, releasedBytes: 0, blocked: false };
 
   try {
     await mkdir(outputDir, { recursive: true, mode: 0o700 });
     const entries = await readdir(outputDir, { withFileTypes: true });
-    const cutoff = Date.now() - (config.outputRetentionDays || 30) * 24 * 60 * 60 * 1000;
-
-    await Promise.all(
-      entries.map(async (entry) => {
-        if (!entry.isFile() || !entry.name.startsWith(OUTPUT_PREFIX)) return;
-        const fullPath = path.join(outputDir, entry.name);
+    const owned = entries.filter((entry) => entry.isFile() && entry.name.startsWith(OUTPUT_PREFIX));
+    if (owned.length > MAX_MAINTENANCE_ENTRIES) {
+      debug(config, `output cleanup skipped: ${owned.length} owned files exceed the bounded scan limit`);
+      return { removed: 0, releasedBytes: 0, blocked: true };
+    }
+    const now = Date.now();
+    const cutoff = now - (config.outputRetentionDays || DEFAULT_OUTPUT_RETENTION_DAYS) * 24 * 60 * 60 * 1000;
+    const activeCutoff = now - ACTIVE_OUTPUT_GRACE_MS;
+    const files = [];
+    for (const entry of owned) {
+      const fullPath = path.join(outputDir, entry.name);
+      try {
         const fileStat = await stat(fullPath);
-        if (fileStat.mtimeMs < cutoff) await unlink(fullPath);
-      })
-    );
+        files.push({ path: fullPath, mtimeMs: fileStat.mtimeMs, bytes: fileStat.size });
+      } catch (error) {
+        debug(config, `output cleanup skipped ${entry.name}: ${error.message}`);
+      }
+    }
+    const maxBytes = config.outputMaxBytes || DEFAULT_OUTPUT_MAX_BYTES;
+    const maxFiles = config.outputMaxFiles || DEFAULT_OUTPUT_MAX_FILES;
+    const eligible = files
+      .filter((file) => file.mtimeMs < activeCutoff)
+      .sort((left, right) => left.mtimeMs - right.mtimeMs);
+    let totalBytes = files.reduce((total, file) => total + file.bytes, 0);
+    let totalFiles = files.length;
+    const candidates = [];
+    for (const file of eligible) {
+      if (file.mtimeMs < cutoff || totalBytes > maxBytes || totalFiles > maxFiles) {
+        candidates.push(file);
+        totalBytes -= file.bytes;
+        totalFiles--;
+      }
+    }
+    let removed = 0;
+    let releasedBytes = 0;
+    for (const file of candidates) {
+      if (execute) {
+        try {
+          await unlink(file.path);
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            debug(config, `output cleanup skipped ${path.basename(file.path)}: ${error.message}`);
+            continue;
+          }
+        }
+      }
+      removed++;
+      releasedBytes += file.bytes;
+    }
+    return { removed, releasedBytes, blocked: false };
   } catch (error) {
     debug(config, `output cleanup skipped: ${error.message}`);
+    return { removed: 0, releasedBytes: 0, blocked: true };
+  }
+}
+
+async function writeAtomic(fullPath, content) {
+  const temporaryPath = `${fullPath}.tmp-${process.pid}-${randomBytes(3).toString("hex")}`;
+  try {
+    await writeFile(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+    await rename(temporaryPath, fullPath);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => {});
+    throw error;
+  }
+}
+
+function writeAtomicSync(fullPath, content) {
+  const temporaryPath = `${fullPath}.tmp-${process.pid}-${randomBytes(3).toString("hex")}`;
+  try {
+    writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+    renameSync(temporaryPath, fullPath);
+  } catch (error) {
+    try {
+      unlinkSync(temporaryPath);
+    } catch {}
+    throw error;
   }
 }
 
@@ -86,7 +162,7 @@ function outputPath(config, { kind, provider, label, extension = "txt" }) {
 export async function writeFullOutput(config, { kind, provider, label, content, extension = "txt" }) {
   await mkdir(config.outputDir, { recursive: true, mode: 0o700 });
   const fullPath = outputPath(config, { kind, provider, label, extension });
-  await writeFile(fullPath, content, { encoding: "utf8", mode: 0o600 });
+  await writeAtomic(fullPath, content);
   return fullPath;
 }
 
@@ -138,7 +214,7 @@ export function writeRunRecordSync(config, { kind, label, record }) {
   try {
     mkdirSync(config.outputDir, { recursive: true, mode: 0o700 });
     const fullPath = outputPath(config, { kind: "run", provider: kind, label, extension: "json" });
-    writeFileSync(fullPath, JSON.stringify(record, jsonReplacer, 2), { encoding: "utf8", mode: 0o600 });
+    writeAtomicSync(fullPath, JSON.stringify(record, jsonReplacer, 2));
     return fullPath;
   } catch (error) {
     debug(config, `run record skipped: ${error.message}`);
@@ -180,7 +256,7 @@ export function printJson(value, { config, kind = "output", provider = "result",
     try {
       mkdirSync(config.outputDir, { recursive: true, mode: 0o700 });
       fullPath = outputPath(config, { kind, provider, label, extension: "json" });
-      writeFileSync(fullPath, serialized, { encoding: "utf8", mode: 0o600 });
+      writeAtomicSync(fullPath, serialized);
     } catch (error) {
       debug(config, `bounded output archive skipped: ${error.message}`);
     }

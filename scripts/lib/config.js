@@ -18,7 +18,9 @@ export const DEFAULT_MAX_SOURCES = 12;
 const DEFAULT_DEADLINE_SECONDS = 240;
 const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 const DEFAULT_OUTPUT_DIR = path.join(homedir(), ".cache", "grok-search", "outputs");
-const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
+export const DEFAULT_OUTPUT_RETENTION_DAYS = 30;
+export const DEFAULT_OUTPUT_MAX_BYTES = 1024 * 1024 * 1024;
+export const DEFAULT_OUTPUT_MAX_FILES = 4096;
 const DEFAULT_RESPONSES_MAX_TURNS = 3;
 const DEFAULT_RESPONSES_REASONING_EFFORT = "low";
 const DEFAULT_RESPONSES_OPENROUTER_ENGINE = "auto";
@@ -327,7 +329,27 @@ export async function loadConfig({ requireGrok = false } = {}) {
       { min: 0 }
     ),
     outputDir,
-    outputRetentionDays: DEFAULT_OUTPUT_RETENTION_DAYS,
+    outputRetentionDays: envOrFileInt(
+      "GROK_OUTPUT_RETENTION_DAYS",
+      fileConfig,
+      ["GROK_OUTPUT_RETENTION_DAYS", "outputRetentionDays", "output_retention_days"],
+      DEFAULT_OUTPUT_RETENTION_DAYS,
+      { min: 1 }
+    ),
+    outputMaxBytes: envOrFileInt(
+      "GROK_OUTPUT_MAX_BYTES",
+      fileConfig,
+      ["GROK_OUTPUT_MAX_BYTES", "outputMaxBytes", "output_max_bytes"],
+      DEFAULT_OUTPUT_MAX_BYTES,
+      { min: 1 }
+    ),
+    outputMaxFiles: envOrFileInt(
+      "GROK_OUTPUT_MAX_FILES",
+      fileConfig,
+      ["GROK_OUTPUT_MAX_FILES", "outputMaxFiles", "output_max_files"],
+      DEFAULT_OUTPUT_MAX_FILES,
+      { min: 1 }
+    ),
     // One JSON record per command (query, options, answer, sources, usage, errors) so a run
     // can be replayed without a session export. `GROK_RUN_LOG=off` disables it.
     runLog: envOrFileBool("GROK_RUN_LOG", fileConfig, ["GROK_RUN_LOG", "runLog", "run_log"], true),

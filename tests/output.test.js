@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { printJson, runRecordBase, writeFullOutput, writeRunRecord, writeRunRecordSync } from "../scripts/lib/output.js";
+import { maintainOutputDir, printJson, runRecordBase, writeFullOutput, writeRunRecord, writeRunRecordSync } from "../scripts/lib/output.js";
 
 const outputDir = await mkdtemp(path.join(tmpdir(), "grok-search-output-test-"));
 const config = { outputDir, outputRetentionDays: 30 };
@@ -75,6 +75,12 @@ try {
 assert.equal(boundedOutput.truncated, true);
 assert.equal(Object.hasOwn(boundedOutput, "full_path"), false);
 assert.match(boundedOutput.warning, /无法保存完整输出/);
+
+// Cleanup is bounded and respects the explicit age/size policy.
+await utimes(first, new Date("2020-01-01T00:00:00Z"), new Date("2020-01-01T00:00:00Z"));
+const cleanup = await maintainOutputDir({ ...config, outputMaxFiles: 1 }, { execute: true });
+assert.equal(cleanup.blocked, false);
+assert.equal(cleanup.removed > 0, true);
 
 // Secrets pasted into argv are masked in the record header.
 const originalArgv = process.argv;

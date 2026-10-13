@@ -4,12 +4,12 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const commands = { search: "search.js", fetch: "fetch.js", map: "map.js" };
+const commands = { search: "search.js", fetch: "fetch.js", map: "map.js", prune: "prune.js" };
 const [command, ...args] = process.argv.slice(2);
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 if (!commands[command]) {
-  const usage = "Usage: grok-search <search|fetch|map> [options] [query-or-url]";
+  const usage = "Usage: grok-search <search|fetch|map> [options] [query-or-url]\n       grok-search prune [--yes]";
   (command === "--help" || command === "-h" ? console.log : console.error)(usage);
   process.exitCode = command === "--help" || command === "-h" ? 0 : 2;
 } else {

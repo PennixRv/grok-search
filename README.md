@@ -38,6 +38,8 @@ grok-search map https://docs.example.com --limit 20
 ./bin/grok-search search --no-extra "latest Node.js LTS"
 ./bin/grok-search fetch https://example.com
 ./bin/grok-search map https://docs.example.com --limit 20
+./bin/grok-search prune
+./bin/grok-search prune --yes  # 仅在复核 dry-run 后使用
 ```
 
 其他 agent harness 也可以采用同样方式：读取 `SKILL.md`，再按需运行 `bin/grok-search search`、`bin/grok-search fetch`、`bin/grok-search map`。
@@ -92,6 +94,9 @@ chmod 600 ~/.config/grok-search/config.json
   "tavilyApiKey": "",
   "tavilyApiUrl": "https://api.tavily.com",
   "outputDir": "",
+  "outputRetentionDays": 30,
+  "outputMaxBytes": 1073741824,
+  "outputMaxFiles": 4096,
   "runLog": true
 }
 ```
@@ -111,6 +116,7 @@ chmod 600 ~/.config/grok-search/config.json
 - 优先级为 命令行 > 环境变量 > 配置文件 > 默认值。注意配置文件由你书写、命令行参数由调用本工具的 agent 书写：标量配置（如 `searchSource`）是**默认值**，agent 可以覆盖，实际生效值见 `diagnostics.options`；但配置里的**限制**不会被静默抹掉——allow-list 与 deny-list 都是限制，命令行只能收紧不能放宽。越界报 `RESPONSES_FILTER_FORBIDDEN`，把 allow-list 减空报 `RESPONSES_FILTER_EMPTY`，两个 deny-list 合并而非替换。规则见 [docs/responses-mode.md](docs/responses-mode.md#配置与命令行的优先级)。
 - `responsesOpenRouterEngine` 可选 `auto`、`native`、`exa`、`parallel` 或 `perplexity`，仅在 `apiProvider` 为 `openrouter` 时生效。
 - `tavilyApiKey` 可留空；`outputDir` 留空时使用默认目录 `~/.cache/grok-search/outputs/`；`runLog: false` 关闭每次调用的运行记录落盘。
+- 输出维护默认保留 30 天、最多 1 GiB 和 4096 个自有文件；可用 `GROK_OUTPUT_RETENTION_DAYS`、`GROK_OUTPUT_MAX_BYTES`、`GROK_OUTPUT_MAX_FILES` 或同名配置键调整。`grok-search prune` 默认只预览，`--yes` 才执行 owner 维护；活动写入和超过有界扫描上限的目录会闭锁。
 
 如果使用 OpenRouter，核心字段可改为：
 
@@ -177,6 +183,9 @@ Node 原生 `fetch` 默认不会可靠读取终端代理变量。本项目会在
 | `TAVILY_API_KEY` | `tavilyApiKey` | 否 | `search.js`、`fetch.js`、`map.js` | 启用 Tavily Search / Extract / Map；没有它时使用 Direct fallback。 |
 | `TAVILY_API_URL` | `tavilyApiUrl` | 否 | Tavily 路径 | 默认 `https://api.tavily.com`。 |
 | `GROK_OUTPUT_DIR` | `outputDir` | 否 | 所有脚本 | 覆盖长输出与运行记录的落盘目录。默认 `~/.cache/grok-search/outputs/`。 |
+| `GROK_OUTPUT_RETENTION_DAYS` | `outputRetentionDays` | 否 | 输出维护 | 默认 `30`；最小值为 `1`。 |
+| `GROK_OUTPUT_MAX_BYTES` | `outputMaxBytes` | 否 | 输出维护 | 默认 `1073741824`；自有输出目录的总字节上限。 |
+| `GROK_OUTPUT_MAX_FILES` | `outputMaxFiles` | 否 | 输出维护 | 默认 `4096`；自有输出文件数上限。 |
 | `GROK_RUN_LOG` | `runLog` | 否 | 所有脚本 | 默认 `true`，每次调用写一份运行记录 JSON；`off` / `false` 关闭后 `sources.raw_path` / `diagnostics.run_path` 为 null。 |
 | `GROK_DEBUG_RAW` | — | 否 | `search.js` | 仅环境变量。设为 `1` 时把脱敏后的完整 Grok 响应作为 `grok_raw` 写进运行记录（`--full-sources` 亦然）。 |
 | `GROK_DEBUG` | — | 否 | 所有脚本 | 仅环境变量。设为 `true` 时把重试 / 清理 / 代理调试日志写到 stderr。 |
@@ -338,7 +347,7 @@ map 成功输出使用 `urls` 表示发现的 URL。provider、response time、i
 ~/.cache/grok-search/outputs/
 ```
 
-设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行都会 best-effort 清理输出目录中超过 30 天的 `grok-search-*` 文件。
+设置 `GROK_OUTPUT_DIR` 可以覆盖该路径。每次运行会执行有界 owner 维护；需要人工盘点或主动清理时使用 `grok-search prune`，默认 dry-run，复核后才使用 `--yes`。
 
 除 preview 溢出文件外，每次调用还会写一份运行记录 `grok-search-<ts>-run-<kind>-<label>-<rand>.json`（`schema_version: 2`，权限 0600），成功、失败、`DEADLINE_EXCEEDED` 都写；`GROK_RUN_LOG=off` 或 `runLog: false` 关闭。search 记录含脱敏 argv、query、instructions、生效 options、完整 answer、未裁剪 sources、`grok_tool_calls`、diagnostics；fetch 记录含正文全文、metadata、provider_attempts；map 记录含 urls。`GROK_DEBUG_RAW=1` 或 `--full-sources` 时再附 `grok_raw`。
 
