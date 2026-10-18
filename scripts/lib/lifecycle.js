@@ -20,6 +20,11 @@ function paths(target) {
   return { config, receipt: join(dirname(config), `.pennix-lifecycle-${target}.json`) };
 }
 
+function inputDigest(target, values, secrets) {
+  const sorted = (value) => Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+  return createHash("sha256").update(JSON.stringify({ secrets: sorted(secrets), target, values: sorted(values) })).digest("hex");
+}
+
 async function readJson(path, optional = false) {
   try {
     const metadata = await lstat(path);
@@ -96,11 +101,17 @@ async function inspect(target, desiredDigest = null) {
   if (spec.env.some((name) => process.env[name]?.trim())) {
     return { state: "environment-override", owned: Boolean(record), detail: "environment overrides the Grok owner file" };
   }
-  if (!record) return { state: "external", owned: false, detail: "Grok target fields exist without lifecycle ownership" };
+  if (!record) {
+    const values = {}, secrets = {};
+    for (const [field, name] of Object.entries(spec.fields)) (name.endsWith("key") ? secrets : values)[name] = file[field];
+    const expected = inputDigest(target, values, secrets);
+    return { state: desiredDigest === expected ? "adoptable" : "external", owned: false, detail: "Grok target fields exist without lifecycle ownership" };
+  }
   if (record.schema !== 2 || record.owner !== "grok-search" || record.target !== target
     || !Array.isArray(record.fields) || typeof record.digest !== "string" || typeof record.desiredDigest !== "string") {
     return { state: "invalid", owned: false, detail: "Grok lifecycle receipt is invalid" };
   }
+  if (record.digest !== await digest(config)) return { state: "invalid", owned: true, detail: "Grok owner file changed outside lifecycle ownership" };
   const current = record.schema === 2 && record.owner === "grok-search" && record.target === target
     && Array.isArray(record.fields) && record.fields.join("\0") === keys.join("\0")
     && record.digest === await digest(config)
@@ -111,9 +122,11 @@ async function inspect(target, desiredDigest = null) {
 async function configure(target, input) {
   const spec = TARGETS[target];
   if (!spec || input.target !== target || typeof input.desired_digest !== "string" || !input.values || !input.secrets) throw new Error("Grok lifecycle input is invalid");
+  if (inputDigest(target, input.values, input.secrets) !== input.desired_digest) throw new Error("Grok lifecycle desired digest is invalid");
   const before = await inspect(target, input.desired_digest);
   if (before.state === "current") return before;
-  if (["external", "invalid", "environment-override"].includes(before.state)) throw new Error(`Grok owner state ${before.state} cannot be taken over`);
+  if (["external", "invalid", "environment-override"].includes(before.state)
+    || (before.state === "adoptable" && input.adopt_existing !== true)) throw new Error(`Grok owner state ${before.state} cannot be taken over`);
   const { config, receipt } = paths(target);
   const file = (await readJson(config, true)) || {};
   for (const [field, source] of Object.entries(spec.fields)) {
@@ -126,13 +139,24 @@ async function configure(target, input) {
   let beforeReceipt = null;
   try { beforeConfig = await readFile(config); } catch (error) { if (error?.code !== "ENOENT") throw error; }
   try { beforeReceipt = await readFile(receipt); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+  const shared = [];
+  for (const other of Object.keys(TARGETS).filter((item) => item !== target)) {
+    const otherPath = paths(other).receipt;
+    const record = await readJson(otherPath, true);
+    if (record) {
+      if ((await inspect(other)).state !== "current") throw new Error("shared Grok receipt is invalid or drifted");
+      shared.push({ path: otherPath, record, raw: await readFile(otherPath) });
+    }
+  }
   try {
-    await writeJson(config, file);
+    if (before.state !== "adoptable") await writeJson(config, file);
     await writeJson(receipt, { schema: 2, owner: "grok-search", target, fields: Object.keys(spec.fields), digest: await digest(config), desiredDigest: input.desired_digest });
+    for (const other of shared) await writeJson(other.path, { ...other.record, digest: await digest(config) });
   } catch (error) {
     try {
       if (beforeConfig === null) await rm(config, { force: true }); else await writeRaw(config, beforeConfig);
       if (beforeReceipt === null) await rm(receipt, { force: true }); else await writeRaw(receipt, beforeReceipt);
+      for (const other of shared) await writeRaw(other.path, other.raw);
     } catch (rollback) {
       throw new Error("Grok lifecycle write failed and rollback failed", { cause: rollback });
     }
