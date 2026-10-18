@@ -6,11 +6,13 @@ import { configFilePath } from "./config.js";
 
 const TARGETS = {
   grok: {
-    fields: { grokApiUrl: "base_url", grokApiKey: "api_key", grokModel: "model" },
+    fields: { apiUrl: "base_url", apiKey: "api_key", model: "model" },
+    secretFields: ["apiKey"],
     env: ["GROK_API_URL", "GROK_API_KEY", "GROK_MODEL"],
   },
   "grok-tavily": {
     fields: { tavilyApiUrl: "base_url", tavilyApiKey: "api_key" },
+    secretFields: ["tavilyApiKey"],
     env: ["TAVILY_API_URL", "TAVILY_API_KEY"],
   },
 };
@@ -103,7 +105,7 @@ async function inspect(target, desiredDigest = null) {
   }
   if (!record) {
     const values = {}, secrets = {};
-    for (const [field, name] of Object.entries(spec.fields)) (name.endsWith("key") ? secrets : values)[name] = file[field];
+    for (const [field, name] of Object.entries(spec.fields)) (spec.secretFields.includes(field) ? secrets : values)[name] = file[field];
     const expected = inputDigest(target, values, secrets);
     return { state: desiredDigest === expected ? "adoptable" : "external", owned: false, detail: "Grok target fields exist without lifecycle ownership" };
   }
@@ -131,7 +133,7 @@ async function configure(target, input) {
   const file = (await readJson(config, true)) || {};
   for (const [field, source] of Object.entries(spec.fields)) {
     if (typeof input.values[source] !== "string" && typeof input.secrets[source] !== "string") throw new Error(`Grok lifecycle field missing: ${source}`);
-    const value = source.endsWith("key") ? input.secrets[source] : input.values[source];
+    const value = spec.secretFields.includes(field) ? input.secrets[source] : input.values[source];
     if (!value || /[\r\n]/.test(value)) throw new Error("Grok lifecycle value is invalid");
     file[field] = value;
   }
