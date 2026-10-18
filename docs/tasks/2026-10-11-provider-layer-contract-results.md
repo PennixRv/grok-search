@@ -15,4 +15,4 @@ providers 参考同步实际 search 顺序（先 Responses 后 extra）、默认
 - npm test：通过全部现有 sources/proxy/responses/output/retry/argv/pennix 离线矩阵。
 - 系统 skill-creator quick_validate：通过。
 
-下一步审阅并推送源码验收提交供 Pennix catalog 固定。private npm 不发布，无服务商请求或凭据读取；模型组合和安装消费者门由 Pennix/根继续完成。
+源码验收提交 fb1b6a0df58f18e56cf6f43da1baa21739c4b91a 已实际推送 origin/main；README 同步后的 pennix 单测与 diff --check 通过。private npm 不发布，无服务商请求或凭据读取；模型组合和安装消费者门由 Pennix/根继续完成，本段是后续纯任务留痕，代码消费来源仍为上述提交。
