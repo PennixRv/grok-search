@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { inferApiProvider } from "../scripts/lib/config.js";
-import { buildResponsesBody, parseGrokResponses } from "../scripts/lib/grok-responses.js";
+import { buildResponsesBody, hasSearchEvidence, parseGrokResponses } from "../scripts/lib/grok-responses.js";
 
 const baseOptions = {
   platform: "",
@@ -521,5 +521,15 @@ const missing = parseGrokResponses({});
 assert.equal(missing.text, "");
 assert.equal(missing.sources.length, 0);
 assert.equal(missing.diagnostics.warnings.length >= 1, true);
+
+assert.equal(
+  hasSearchEvidence([{ url: "https://example.com", source_type: "citation" }], { responses_tool_call_total: 0 }),
+  false
+);
+assert.equal(hasSearchEvidence([], { responses_tool_call_total: 1 }), false);
+assert.equal(
+  hasSearchEvidence([{ url: "https://example.com", source_type: "searched" }], { responses_tool_call_total: 1 }),
+  true
+);
 
 console.log("responses fixtures ok");

@@ -524,6 +524,20 @@ export function parseGrokResponses(data, { defaultTool = "web_search", xEnabled 
   };
 }
 
+export function hasSearchEvidence(sources, diagnostics) {
+  const toolCalls = Number(diagnostics?.responses_tool_call_total);
+  return (
+    Number.isFinite(toolCalls) &&
+    toolCalls > 0 &&
+    Array.isArray(sources) &&
+    sources.some(
+      (source) =>
+        /^(?:https?):\/\//i.test(source?.url || "") &&
+        (source?.source_type === "citation" || source?.source_type === "searched")
+    )
+  );
+}
+
 export async function searchGrokResponses(query, options, config) {
   const endpoint = responsesEndpoint(config);
   const body = buildResponsesBody(query, options, config);

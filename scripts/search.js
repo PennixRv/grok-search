@@ -9,7 +9,7 @@ import {
   usesXSearch,
 } from "./lib/config.js";
 import { startDeadline } from "./lib/deadline.js";
-import { searchGrokResponses } from "./lib/grok-responses.js";
+import { hasSearchEvidence, searchGrokResponses } from "./lib/grok-responses.js";
 import { cleanupOutputDir, previewText, printJson, runRecordBase, writeRunRecord, writeRunRecordSync } from "./lib/output.js";
 import { SEARCH_BUDGET_TOTAL, SEARCH_BUDGET_X } from "./lib/prompts.js";
 import { tavilySearch } from "./lib/tavily.js";
@@ -761,7 +761,17 @@ async function grokChannel(args, config, searchOptions) {
   delete diagnostics.responses_tool_call_counts;
   diagnostics.responses_tool_calls = summarizeToolCalls(toolCalls, toolCallTotal, toolCallCounts);
   diagnostics.search_budget = searchBudget(searchOptions.searchSource, diagnostics);
-  if (!grok.sources.length) warnings.push("No responses citations or searched sources were found.");
+  if (!hasSearchEvidence(grok.sources, { ...diagnostics, responses_tool_call_total: toolCallTotal })) {
+    const error = new Error("Grok Responses 未返回可核验的搜索证据");
+    error.code = "GROK_SEARCH_EVIDENCE_MISSING";
+    error.diagnostics = {
+      ...diagnostics,
+      responses_tool_call_total: toolCallTotal,
+      responses_tool_call_counts: toolCallCounts,
+      warnings: [...warnings, "Grok Responses 未返回可核验的搜索证据。"],
+    };
+    throw error;
+  }
   return {
     endpoint: grok.endpoint,
     model: grok.model,
@@ -828,8 +838,10 @@ function degradedAnswer(sources, label) {
 function failureDiagnostics(config, searchOptions, extraOptions, extra, error, { failure = null } = {}) {
   const labels = failure ? GROK_FAILURE_LABELS[failure] : null;
   const warning = labels ? labels.warning : `Responses search failed: ${error.message}`;
+  const errorDiagnostics = error?.diagnostics || {};
   return {
     grok_endpoint: "responses",
+    ...errorDiagnostics,
     ...(labels ? { grok_error: { code: labels.code, message: error.message } } : {}),
     warnings: [warning, ...(extra?.warnings || []), ...(error?.diagnostics?.warnings || [])],
     provider_attempts: [grokFailureAttempt(config, error), ...(extra?.provider_attempts || [])],

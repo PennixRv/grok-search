@@ -20,14 +20,27 @@ const events = [];
 const server = createServer((req, res) => {
   if (req.url === "/responses") {
     events.push("responses-start");
-    req.resume();
-    setTimeout(() => {
-      events.push("responses-end");
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({
-        output: [{ type: "message", content: [{ type: "output_text", text: "ok", annotations: [] }] }],
-      }));
-    }, 30);
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const emptyEvidence = Buffer.concat(chunks).toString().includes("empty evidence");
+      setTimeout(() => {
+        events.push("responses-end");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          output: emptyEvidence
+            ? [{ type: "message", content: [{ type: "output_text", text: "memory answer", annotations: [] }] }]
+            : [
+                {
+                  type: "web_search_call",
+                  status: "completed",
+                  action: { type: "search", query: "ordering check", results: [{ url: "https://example.com/order" }] },
+                },
+                { type: "message", content: [{ type: "output_text", text: "ok", annotations: [] }] },
+              ],
+        }));
+      }, 30);
+    });
     return;
   }
   if (req.url === "/tavily/search") events.push("tavily-start");
@@ -51,6 +64,22 @@ try {
   });
   assert.equal(JSON.parse(result.stdout).diagnostics.options.extra, 1);
   assert.deepEqual(events, ["responses-start", "responses-end", "tavily-start"]);
+
+  await assert.rejects(
+    run(["bin/grok-search", "search", "--no-extra", "empty evidence"], {
+      HOME: testHome,
+      USERPROFILE: testHome,
+      GROK_API_URL: `http://127.0.0.1:${port}`,
+      GROK_API_KEY: "test-key",
+      GROK_API_PROVIDER: "xai",
+      GROK_MODEL: "test-model",
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stdout, /GROK_SEARCH_EVIDENCE_MISSING/);
+      return true;
+    }
+  );
 } finally {
   server.close();
 }
