@@ -8,7 +8,7 @@ metadata:
 
 输出目录维护使用同一 owner 的 `grok-search prune`，不通过 shell 删除输出文件。
 
-普通调用使用已安装的 `grok-search` 命令（`grok-search search`、`grok-search fetch` 或 `grok-search map`）。`$pennix-component-lifecycle` 的 `replace-staged` 流程会安装本地生产依赖，并通过 `~/.local/bin` 提供受管命令；不要使用全局 `npm` 安装或创建服务商包装器。在受管链接建立前，只在安装诊断中从 Skill 根目录或绝对路径调用可执行文件。
+普通调用使用已安装的 `grok-search` 命令（`grok-search search`、`grok-search fetch` 或 `grok-search map`）。安装或升级交给 `$pennix-component-lifecycle`，由独立 Lifecycle 工具管理 `pennix-skills` 集合、本地生产依赖和 `~/.local/bin` 受管命令；不要使用全局 `npm` 安装或创建服务商包装器。在受管链接建立前，只在安装诊断中从 Skill 根目录或绝对路径调用可执行文件。
 
 该可执行文件属于 `grok-search`。可由宿主直接命令入口或 context-mode 执行同一 CLI；载体必须保留 cwd、参数、退出码、完整 JSON 状态和来源，超时、失败及部分结果不能因摘要而丢失。context-mode 不负责服务商、凭据、重试或后备；不要用 Shell HTTP 或另造包装器替代 CLI。秘密配置与导入保留原生入口，凭据不进入索引；普通结果文件可按需做限定分析。
 
