@@ -1,0 +1,5 @@
+# 工作流体检 W05：固定源与物化路由一致
+
+执行根任务workflow-health-remediation-release-deploy已批准合同的HA08，批准见根approval.md；沿main，不新分支／工作树。修复真实SKILL.md及providers参考，使普通外部检索首选Tavily、Grok仅在适合操作或明确选择时使用，整条失败报告缺口并停止，不自动启动Hikari后备。保留已授权CLI内部provider与有限重试语义，不改搜索实现或秘密配置。
+
+先运行现有离线npm test和Skill校验，提交推送固定源，再由pennix-skills更新collection.json并完整重物化archive；禁止只修安装副本或在物化树留下overlay。私有包不发布npm；正式交付为根W08固定本提交和集合发行，W09—W11两端通过Lifecycle原生repair。真实预算不增加。

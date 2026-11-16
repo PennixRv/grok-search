@@ -18,7 +18,7 @@ Responses 端点通常经由 OpenAI 兼容中继，中继差异会改变成本�
 
 ## Grok 失败
 
-Grok 返回 402、配额错误码，或 429 正文涉及配额、余额或计费时，仅在 extra 启用且有原始结果时，`search.js` 返回带明显标记的 Tavily 原始结果：`diagnostics.degraded: true`、`diagnostics.grok_error.code: QUOTA_EXHAUSTED`。普通 429 同样可以降级为 `RATE_LIMITED`。`--no-extra` 或没有可用 extra 时仍返回错误，其他 Grok 失败也返回错误。可用 degraded 若满足当前来源和范围，就核对原始来源，不再启动 Hikari；只有整条命令不可用，代理才可经 `$pennix-tavily-search` 执行一次自托管后备，失败即停止。如果出现 `GROK_API_URL 未配置` 或 `GROK_API_KEY 未配置`，说明缺少必要配置；应将用户指向 `README.md`，不要读取秘密或绕过。
+Grok 返回 402、配额错误码，或 429 正文涉及配额、余额或计费时，仅在 extra 启用且有原始结果时，`search.js` 返回带明显标记的 Tavily 原始结果：`diagnostics.degraded: true`、`diagnostics.grok_error.code: QUOTA_EXHAUSTED`。普通 429 同样可以降级为 `RATE_LIMITED`。`--no-extra` 或没有可用 extra 时仍返回错误，其他 Grok 失败也返回错误。可用 degraded 若满足当前来源和范围，就核对原始来源；整条命令失败时报告诊断与限定缺口并停止，不自动改用 Hikari、重启命令或切换服务商。一般外部检索的首选入口由集合路由决定，不能由失败恢复逻辑反向授权其他调用。如果出现 `GROK_API_URL 未配置` 或 `GROK_API_KEY 未配置`，说明缺少必要配置；应将用户指向 `README.md`，不要读取秘密或绕过。
 
 ## 来源卡片
 
